@@ -18,6 +18,7 @@ enum class ColorFormat
 {
 	UNKNOWN,
 	YCbCr422,
+	YCbCr420,
 	RGB444
 };
 

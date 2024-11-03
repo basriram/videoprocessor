@@ -38,14 +38,17 @@ VideoFrame::~VideoFrame()
 
 void VideoFrame::SourceBufferAddRef()
 {
-	m_sourceBuffer->AddRef();
+	if (m_sourceBuffer!=NULL)
+		m_sourceBuffer->AddRef();
 }
 
 
 void VideoFrame::SourceBufferRelease()
 {
-	const ULONG refCount = m_sourceBuffer->Release();
-	assert(refCount == 0);
+	if (m_sourceBuffer != NULL) {
+		const ULONG refCount = m_sourceBuffer->Release();
+		//assert(refCount == 0);
+	}
 }
 
 

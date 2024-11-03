@@ -21,6 +21,10 @@ const TCHAR* ToString(const ColorFormat encoding)
 	case ColorFormat::YCbCr422:
 		return TEXT("YCbCr 4:2:2");
 
+	case ColorFormat::YCbCr420:
+		return TEXT("YCbCr 4:2:0");
+
+
 	case ColorFormat::RGB444:
 		return TEXT("RGB 4:4:4");
 	}

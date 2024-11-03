@@ -25,6 +25,9 @@ const GUID TranslateToMediaSubType(VideoFrameEncoding videoFrameEncoding)
 	case VideoFrameEncoding::HDYC:
 		return MEDIASUBTYPE_HDYC;
 
+	case  VideoFrameEncoding::P010:
+		return MEDIASUBTYPE_P010;
+
 	case VideoFrameEncoding::V210:
 		return MEDIASUBTYPE_v210;
 

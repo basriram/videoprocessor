@@ -211,7 +211,9 @@ CVideoProcessorDlg::CVideoProcessorDlg():
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 
-	m_blackMagicDeviceDiscoverer = new BlackMagicDeckLinkCaptureDeviceDiscoverer(*this);
+	//m_blackMagicDeviceDiscoverer = new BlackMagicDeckLinkCaptureDeviceDiscoverer(*this);
+	m_magewellProCaptureDeviceDiscoverer = new MagewellProCaptureDeviceDiscoverer(*this);
+
 }
 
 
@@ -1330,8 +1332,10 @@ void CVideoProcessorDlg::CaptureRemove()
 		   m_rendererState == RendererState::RENDERSTATE_FAILED);
 
 	m_captureDeviceState = CaptureDeviceState::CAPTUREDEVICESTATE_UNKNOWN;
-	m_captureDevice->SetCallbackHandler(nullptr);
-	m_captureDevice.Release();
+	if (m_captureDevice) {
+		m_captureDevice->SetCallbackHandler(nullptr);
+		m_captureDevice.Release();
+	}
 	m_captureDevice = nullptr;
 
 	m_desiredCaptureInputId = INVALID_CAPTURE_INPUT_ID;
@@ -2229,8 +2233,8 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 
 
 	// Start discovery services
-	m_blackMagicDeviceDiscoverer->Start();
-
+	//m_blackMagicDeviceDiscoverer->Start();
+	m_magewellProCaptureDeviceDiscoverer->Start();
 	m_accelerator = LoadAccelerators(AfxGetResourceHandle(), MAKEINTRESOURCE(IDR_ACCELERATOR1));
 	if (!m_accelerator)
 		FatalError(TEXT("Failed to load accelerator"));
@@ -2381,12 +2385,16 @@ void CVideoProcessorDlg::OnClose()
 	m_wantToTerminate = true;
 
 	// Stop discovery
-	if (m_blackMagicDeviceDiscoverer)
+	//if (m_blackMagicDeviceDiscoverer)
+	//{
+	//	m_blackMagicDeviceDiscoverer->Stop();
+	//	m_blackMagicDeviceDiscoverer.Release();
+	//}
+	if (m_magewellProCaptureDeviceDiscoverer)
 	{
-		m_blackMagicDeviceDiscoverer->Stop();
-		m_blackMagicDeviceDiscoverer.Release();
+		m_magewellProCaptureDeviceDiscoverer->Stop();
+		m_magewellProCaptureDeviceDiscoverer.Release();
 	}
-
 	UpdateState();
 
 	// Remove all renderers

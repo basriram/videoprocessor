@@ -19,6 +19,11 @@ extern "C" {
 
 #include "VideoProcessorApp.h"
 
+#define DEBUG
+#define _DEBUG
+#define _TRACE
+#define TRACE
+
 
 BEGIN_MESSAGE_MAP(CVideoProcessorApp, CWinAppEx)
 	ON_COMMAND(ID_HELP, &CWinApp::OnHelp)
@@ -41,7 +46,7 @@ BOOL CVideoProcessorApp::InitInstance()
 #ifdef _DEBUG
 	av_log_set_level(AV_LOG_TRACE);
 #endif
-
+	DbgSetModuleLevel(LOG_TRACE|LOG_MEMORY, 4);
 	CHelpDialog help;
 	CVideoProcessorDlg dlg;
 	m_pMainWnd = &dlg;

@@ -13,6 +13,7 @@
 #include <atomic>
 
 #include <blackmagic_decklink/BlackMagicDeckLinkCaptureDeviceDiscoverer.h>
+#include <magewell_procapture/MagewellProCaptureDeviceDiscoverer.h>
 #include <PixelValueRange.h>
 #include <CCie1931Control.h>
 #include <IRenderer.h>
@@ -245,6 +246,8 @@ protected:
 	//
 
 	CComPtr<BlackMagicDeckLinkCaptureDeviceDiscoverer> m_blackMagicDeviceDiscoverer;
+
+	CComPtr<MagewellProCaptureDeviceDiscoverer> m_magewellProCaptureDeviceDiscoverer;
 
 	std::set<ACaptureDeviceComPtr> m_captureDevices;
 	CComPtr<ACaptureDevice>	m_captureDevice;

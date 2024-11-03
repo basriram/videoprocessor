@@ -24,6 +24,9 @@ enum class VideoFrameEncoding
 	UYVY,  // BT470 SD video color space
 	HDYC,  // BT.709
 
+	// P010 4:2:0
+	// Twelve 10-bit unsigned components are packed into four 32-bit little-endian words
+	P010,
 	// v210 4:2:2
 	// Twelve 10-bit unsigned components are packed into four 32-bit little-endian words
 	V210,

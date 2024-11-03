@@ -78,6 +78,9 @@ uint32_t VideoState::BytesPerRow() const
 	case VideoFrameEncoding::HDYC:
 		return displayMode->FrameWidth() * 16 / 8;
 
+	case VideoFrameEncoding::P010:
+		return displayMode->FrameWidth() * 2;
+
 	case VideoFrameEncoding::V210:
 		return ((displayMode->FrameWidth() + 47) / 48) * 128;
 
@@ -101,5 +104,8 @@ uint32_t VideoState::BytesPerRow() const
 
 uint32_t VideoState::BytesPerFrame() const
 {
+	if (videoFrameEncoding == VideoFrameEncoding::P010)
+		return BytesPerRow() * displayMode->FrameHeight() * 3 / 2;
+
 	return BytesPerRow() * displayMode->FrameHeight();
 }

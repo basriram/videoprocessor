@@ -192,6 +192,21 @@
     <ClInclude Include="cie.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="magewell_procapture\ring_buffer\ring_buffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="magewell_procapture\MagewellVideoFrame.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="magewell_procapture\MagewellProCaptureDevice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="magewell_procapture\MagewellProCaptureDeviceDiscoverer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="magewell_procapture\MagewellProCaptureTranslate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">
@@ -324,6 +339,21 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="cie.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="magewell_procapture\ring_buffer\ring_buffer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="magewell_procapture\MagewellVideoFrame.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="magewell_procapture\MagewellProCaptureDevice.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="magewell_procapture\MagewellProCaptureDeviceDiscoverer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="magewell_procapture\MagewellProCaptureTranslate.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
