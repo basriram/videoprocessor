@@ -1,0 +1,7 @@
+vs cmd line tools
+
+vsdevcmd.bat -host_arch=amd64 -arch=amd64
+
+d:\msys2\msys2_shell.cmd
+
+configure/make ...

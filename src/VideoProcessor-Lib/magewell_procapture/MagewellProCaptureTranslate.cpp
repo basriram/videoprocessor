@@ -23,23 +23,25 @@
 // Functions
 //
 
-/*
-ColorFormat TranslateColorFormat(MWCAP_VIDEO_SIGNAL_STATUS video_signal_status)
+
+ColorFormat TranslateColorFormat(HDMI_PXIEL_ENCODING pixelEncoding)
 {
-	if (detectedVideoInputFormatFlagsValue & bmdDetectedVideoInputYCbCr422)
-		return ColorFormat::YCbCr422;
-
-	if (detectedVideoInputFormatFlagsValue & bmdDetectedVideoInputRGB444)
+	switch (pixelEncoding) {
+	case HDMI_ENCODING_RGB_444:
 		return ColorFormat::RGB444;
-
+	case HDMI_ENCODING_YUV_422:
+		return ColorFormat::YCbCr422;
+	case HDMI_ENCODING_YUV_420:
+		return ColorFormat::YCbCr420;
+	}
 	throw std::runtime_error("Failed to translate BMDDetectedVideoInputFormatFlags to encoding");
 }
-*/
 
 
-BitDepth TranslateBithDepth(DWORD dwFOURCC)
+BitDepth TranslateBitDepth(BYTE bitDepth)
 {
-	int bitDepth = FOURCC_GetBpp(dwFOURCC);
+	
+	
 	if (bitDepth == 8)
 		return BitDepth::BITDEPTH_8BIT;
 
@@ -49,7 +51,7 @@ BitDepth TranslateBithDepth(DWORD dwFOURCC)
 	if (bitDepth == 12)
 		return BitDepth::BITDEPTH_12BIT;
 
-	throw std::runtime_error("Failed to translate BMDDetectedVideoInputFormatFlags to bit depth");
+	throw std::runtime_error("Failed to translate bit Depth");
 }
 
 
@@ -65,8 +67,9 @@ VideoFrameEncoding TranslateFrameEncoding(DWORD dwFOURCC)
 		return VideoFrameEncoding::HDYC;
 
 	case MWFOURCC_P010:
-	case MWFOURCC_P210:
 		return VideoFrameEncoding::P010;
+	case MWFOURCC_P210:
+		return VideoFrameEncoding::V210;
 	case MWFOURCC_NV12:
 		return VideoFrameEncoding::UNKNOWN;
 	case MWFOURCC_ARGB:
@@ -95,7 +98,6 @@ EOTF TranslateEOTF(LONGLONG electroOpticalTransferFuncValue)
 	switch (electroOpticalTransferFuncValue)
 	{
 	case 0:
-		//return EOTF::SDR;
 		return EOTF::SDR;
 	case 1:
 		return EOTF::HDR;
@@ -110,23 +112,6 @@ EOTF TranslateEOTF(LONGLONG electroOpticalTransferFuncValue)
 	}
 
 	throw std::runtime_error("Failed to translate EOTF");
-}
-
-
-ColorSpace TranslateColorSpace(MWCAP_VIDEO_SIGNAL_STATUS video_signal_status)
-{
-	MWCAP_VIDEO_COLOR_FORMAT mwColorFormat = video_signal_status.colorFormat;
-	if (mwColorFormat & MWCAP_VIDEO_COLOR_FORMAT_YUV601)
-		return ColorSpace::REC_601_625;
-
-	if (mwColorFormat & MWCAP_VIDEO_COLOR_FORMAT_YUV709 || mwColorFormat & MWCAP_VIDEO_COLOR_FORMAT_RGB)
-		return ColorSpace::REC_709;
-
-	if (mwColorFormat & MWCAP_VIDEO_COLOR_FORMAT_YUV2020 || mwColorFormat & MWCAP_VIDEO_COLOR_FORMAT_YUV2020C)
-		return  ColorSpace::BT_2020;
-
-	return ColorSpace::UNKNOWN;
-
 }
 
 
@@ -145,25 +130,20 @@ ColorSpace TranslateColorSpace(MWCAP_VIDEO_COLOR_FORMAT mwColorFormat)
 }
 
 
-DisplayModeSharedPtr TranslateDisplayMode(MWCAP_VIDEO_SIGNAL_STATUS video_signal_status)
+DisplayModeSharedPtr TranslateDisplayMode(int cx, int cy, bool bInterlaced, DWORD dwFrameDuration)
 {
-	printf("Input signal resolution: %d x %d\n", video_signal_status.cx, video_signal_status.cy);
-	double fps = (video_signal_status.bInterlaced == TRUE) ? (double)20000000LL / video_signal_status.dwFrameDuration : (double)10000000LL / video_signal_status.dwFrameDuration;
-	printf("Input signal fps: %.2f\n", fps);
-	printf("Input signal interlaced: %d\n", video_signal_status.bInterlaced);
-	printf("Input signal frame segmented: %d\n", video_signal_status.bSegmentedFrame);
 	return std::make_shared<DisplayMode>(
-		video_signal_status.cx,
-		video_signal_status.cy,
-		video_signal_status.bInterlaced,  // Interlaced?
-		(video_signal_status.bInterlaced == TRUE) ? 20000000LL: 10000000LL,
-		video_signal_status.dwFrameDuration);
+		cx,
+		cy,
+		bInterlaced,  // Interlaced?
+		(bInterlaced == TRUE) ? 20000000LL: 10000000LL,
+		dwFrameDuration);
 }
 
 
-double FPS(MWCAP_VIDEO_SIGNAL_STATUS video_signal_status)
+double FPS(DWORD dwFrameDuration, bool bInterlaced)
 {
-	return (video_signal_status.bInterlaced == TRUE) ? (double)20000000LL / video_signal_status.dwFrameDuration : (double)10000000LL / video_signal_status.dwFrameDuration;
+	return (bInterlaced == TRUE) ? (double)20000000LL / dwFrameDuration : (double)10000000LL / dwFrameDuration;
 }
 
 

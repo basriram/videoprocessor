@@ -35,8 +35,8 @@ class MagewellProCaptureDevice:
 	public ITimingClock
 {
 public:
-	int                             m_frame_duration;
-	int                             m_capture_frame_count;
+	int										 m_capture_frame_count;
+
 	MagewellProCaptureDevice();
 	virtual ~MagewellProCaptureDevice();
 
@@ -60,14 +60,19 @@ public:
 	timingclocktime_t TimingClockTicksPerSecond() const override;
 	const TCHAR* TimingClockDescription() override;
 
-	bool VideoInputHDRModeChanged(bool isHDR, HDMI_INFOFRAME_PACKET& packet);
+	bool VideoInputHDRModeChanged();
 
 	HRESULT __stdcall VideoInputFormatChanged();
+	HRESULT __stdcall CardStateChanged();
 
 	// IUnknown
 	HRESULT	QueryInterface(REFIID iid, LPVOID* ppv) override;
 	ULONG AddRef() override;
 	ULONG Release() override;
+	HANDLE signalLockedEvent;
+	HANDLE frameAvailableEvent;
+	HANDLE interruptEvent;
+	DWORD check_input_signal();
 	DWORD capture_by_input();
 	DWORD render_by_input();
 	static void init();
@@ -108,7 +113,6 @@ protected:
 	int                             m_audio_bit_per_sample;
 
 
-	bool check_signal();
 	bool check_video_buffer();
 	bool check_audio_buffer();
 	int                             m_signal_frame_duration;
@@ -146,12 +150,15 @@ private:
 	RECT* m_p_rect_dest;//NULL
 	int										m_aspect_x;//0
 	int										m_aspect_y;//0
+	int										m_frame_duration;
+	bool									m_is_interlaced;
+	HDMI_PXIEL_ENCODING						m_pixel_encoding; //HDMI_ENCODING_YUV_422
 	MWCAP_VIDEO_COLOR_FORMAT				m_color_format;//MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN
 	MWCAP_VIDEO_QUANTIZATION_RANGE			m_quant_range;//MWCAP_VIDEO_QUANTIZATION_UNKNOWN
 	MWCAP_VIDEO_SATURATION_RANGE			m_sat_range;//MWCAP_VIDEO_SATURATION_UNKNOWN
 	DisplayModeSharedPtr					m_display_mode;
-
-
+	BYTE									m_bit_depth; // Bit Depth
+	HANDLE  m_signal_thread;
 	HANDLE	m_video_thread;
 	HANDLE	m_render_thread;
 	CString m_name;

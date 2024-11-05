@@ -23,7 +23,10 @@ extern "C" {
 #define _DEBUG
 #define _TRACE
 #define TRACE
-
+#define _CRTDBG_MAP_ALLOC
+#define _CRTDBG_MAP_ALLOC
+#include <stdlib.h>
+#include <crtdbg.h>
 
 BEGIN_MESSAGE_MAP(CVideoProcessorApp, CWinAppEx)
 	ON_COMMAND(ID_HELP, &CWinApp::OnHelp)
@@ -50,6 +53,7 @@ BOOL CVideoProcessorApp::InitInstance()
 	CHelpDialog help;
 	CVideoProcessorDlg dlg;
 	m_pMainWnd = &dlg;
+	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 
 	try
 	{
@@ -60,7 +64,8 @@ BOOL CVideoProcessorApp::InitInstance()
 		// using that without further investigation
 		if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)))
 			throw std::runtime_error("Failed to initialize com objects");
-
+		CString renderer("DirectShow - madVR");
+		dlg.DefaultRendererName(renderer);
 		// Parse command line
 		// https://docs.microsoft.com/en-us/cpp/c-runtime-library/argc-argv-wargv
 		int iNumOfArgs;
@@ -497,7 +502,8 @@ BOOL CVideoProcessorApp::InitInstance()
 	}
 
 	CoUninitialize();
-
+	_CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_DEBUG);
+	_CrtDumpMemoryLeaks();
 	return FALSE;
 }
 
