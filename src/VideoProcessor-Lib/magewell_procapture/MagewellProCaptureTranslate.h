@@ -25,7 +25,7 @@ BitDepth TranslateBitDepth(BYTE hdmiBitDepth);
 
 VideoFrameEncoding TranslateFrameEncoding(DWORD dwFOURCC);
 
-EOTF TranslateEOTF(LONGLONG electroOpticalTransferFuncValue);
+EOTF TranslateMagewellEOTF(LONGLONG electroOpticalTransferFuncValue);
 ColorSpace TranslateColorSpace(MWCAP_VIDEO_COLOR_FORMAT mwColorFormat);
 
 DisplayModeSharedPtr TranslateDisplayMode(int cx, int cy, bool bInterlaced, DWORD dwFrameDuration);

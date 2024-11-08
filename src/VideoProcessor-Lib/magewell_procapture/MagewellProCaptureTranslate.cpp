@@ -87,7 +87,7 @@ VideoFrameEncoding TranslateFrameEncoding(DWORD dwFOURCC)
 }
 
 
-EOTF TranslateEOTF(LONGLONG electroOpticalTransferFuncValue)
+EOTF TranslateMagewellEOTF(LONGLONG electroOpticalTransferFuncValue)
 {
 	// 3 bit value
 	assert(electroOpticalTransferFuncValue >= 0);

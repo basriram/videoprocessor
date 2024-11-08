@@ -211,7 +211,7 @@ CVideoProcessorDlg::CVideoProcessorDlg():
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 
-	//m_blackMagicDeviceDiscoverer = new BlackMagicDeckLinkCaptureDeviceDiscoverer(*this);
+	m_blackMagicDeviceDiscoverer = new BlackMagicDeckLinkCaptureDeviceDiscoverer(*this);
 	m_magewellProCaptureDeviceDiscoverer = new MagewellProCaptureDeviceDiscoverer(*this);
 
 }
@@ -2233,7 +2233,7 @@ BOOL CVideoProcessorDlg::OnInitDialog()
 
 
 	// Start discovery services
-	//m_blackMagicDeviceDiscoverer->Start();
+	m_blackMagicDeviceDiscoverer->Start();
 	m_magewellProCaptureDeviceDiscoverer->Start();
 	m_accelerator = LoadAccelerators(AfxGetResourceHandle(), MAKEINTRESOURCE(IDR_ACCELERATOR1));
 	if (!m_accelerator)
@@ -2385,11 +2385,11 @@ void CVideoProcessorDlg::OnClose()
 	m_wantToTerminate = true;
 
 	// Stop discovery
-	//if (m_blackMagicDeviceDiscoverer)
-	//{
-	//	m_blackMagicDeviceDiscoverer->Stop();
-	//	m_blackMagicDeviceDiscoverer.Release();
-	//}
+	if (m_blackMagicDeviceDiscoverer)
+	{
+		m_blackMagicDeviceDiscoverer->Stop();
+		m_blackMagicDeviceDiscoverer.Release();
+	}
 	if (m_magewellProCaptureDeviceDiscoverer)
 	{
 		m_magewellProCaptureDeviceDiscoverer->Stop();

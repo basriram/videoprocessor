@@ -95,9 +95,6 @@ MagewellProCaptureDevice::MagewellProCaptureDevice()
 	m_signal_thread = NULL;
 	m_video_thread = NULL;
 	m_render_thread = NULL;
-	signalLockedEvent = CreateEvent(NULL, TRUE, FALSE, TEXT("Signal Locked"));
-	frameAvailableEvent = CreateEvent(NULL, TRUE, FALSE, TEXT("frames available event "));
-	interruptEvent = CreateEvent(NULL, TRUE, FALSE, TEXT("interrupt Event "));
 
 	// Get current capture id
 	LONGLONG captureInputId;
@@ -141,9 +138,9 @@ MagewellProCaptureDevice::~MagewellProCaptureDevice()
 	handle[1] = m_video_thread;
 	handle[2] = m_render_thread;
 	WaitForMultipleObjects(3, handle, TRUE, 500);
-	CloseHandle(signalLockedEvent);
-	CloseHandle(frameAvailableEvent);
-	CloseHandle(interruptEvent);
+	//CloseHandle(signalLockedEvent);
+	//CloseHandle(frameAvailableEvent);
+	//CloseHandle(interruptEvent);
 
 /*
 	if (m_video_thread) {
@@ -253,11 +250,32 @@ void MagewellProCaptureDevice::SetCallbackHandler(ICaptureDeviceCallback* callba
 		//SendVideoStateCallback();
 		m_canCapture = true;
 		m_signal_thread = CreateThread(NULL, 0, video_signal_pro, (LPVOID)this, 0, NULL);
+		signalLockedEvent = CreateEvent(NULL, TRUE, FALSE, TEXT("Signal Locked"));
+		frameAvailableEvent = CreateEvent(NULL, TRUE, FALSE, TEXT("frames available event "));
+		interruptEvent = CreateEvent(NULL, TRUE, FALSE, TEXT("interrupt Event "));
 		if (NULL == m_signal_thread) {
 			printf("signal check thread failed\n ");
 		}
+		m_capture_video = true;
+		m_video_capturing = true;
 	}
-
+	else {
+		m_canCapture = false;
+		m_capture_video = false;
+		m_video_capturing = false;
+		if (!SetEvent(interruptEvent))
+		{
+			printf("SetEvent failed (%d)\n", GetLastError());
+		}
+		//handle[1] = m_video_thread;
+		//handle[2] = m_render_thread;
+		WaitForSingleObject(m_signal_thread, INFINITE);
+		CloseHandle(signalLockedEvent);
+		CloseHandle(frameAvailableEvent);
+		CloseHandle(interruptEvent);
+		ResetVideoState();
+		UpdateState(CaptureDeviceState::CAPTUREDEVICESTATE_UNKNOWN);
+	}
 	DbgLog((LOG_TRACE, 1, TEXT("MagewellProCaptureDevice::SetCallbackHandler(): updated callback")));
 }
 
@@ -457,6 +475,11 @@ DWORD MagewellProCaptureDevice::check_input_signal()
 
 		ULONGLONG notify_status = 0;
 		if (MWGetNotifyStatus(m_channel_handle, notify, &notify_status) != MW_SUCCEEDED) {
+			continue;
+		}
+
+		if (notify_status == 0) {
+			Sleep(5000);
 			continue;
 		}
 		
@@ -1137,6 +1160,15 @@ void MagewellProCaptureDevice::ResetVideoState()
 //	m_videoHasInputSource = false;
 //	m_videoEotf = BMD_EOTF_INVALID;
 //	m_videoColorSpace = BMD_COLOR_SPACE_INVALID;
+
+	m_width = 0;//0
+	m_height = 0;//0
+	m_color_format = MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN;//
+	m_quant_range = MWCAP_VIDEO_QUANTIZATION_UNKNOWN;
+	m_sat_range = MWCAP_VIDEO_SATURATION_UNKNOWN;
+	//m_videoEotf = -1;
+	m_signal_frame_duration = 0;
+	m_frame_duration = 0;
 	m_videoHasHdrData = false;
 
 	ZeroMemory(&m_videoHdrData, sizeof(m_videoHdrData));
@@ -1181,7 +1213,7 @@ bool MagewellProCaptureDevice::SendVideoStateCallback()
 		{
 			videoState->valid = true;
 			videoState->displayMode = m_display_mode;
-			videoState->eotf = TranslateEOTF(m_videoEotf);
+			videoState->eotf = TranslateMagewellEOTF(m_videoEotf);
 			videoState->colorspace = TranslateColorSpace(m_color_format);
 			videoState->invertedVertical = m_videoInvertedVertical;
 			videoState->videoFrameEncoding = TranslateFrameEncoding(m_mw_fourcc);
