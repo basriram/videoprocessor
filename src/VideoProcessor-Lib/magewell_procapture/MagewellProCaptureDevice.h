@@ -18,6 +18,8 @@
 #include <VideoFrame.h>
 #include <ACaptureDevice.h>
 #include <ITimingClock.h>
+#include <AnAudioSource.h>
+#include <DirectSoundAudioRenderer.h>
 
 // Known invalid values
 //#define BMD_PIXEL_FORMAT_INVALID (BMDPixelFormat)0
@@ -32,7 +34,8 @@
  */
 class MagewellProCaptureDevice:
 	public ACaptureDevice,
-	public ITimingClock
+	public ITimingClock, 
+	public AnAudioSource
 {
 public:
 	int										 m_capture_frame_count;
@@ -75,6 +78,8 @@ public:
 	DWORD check_input_signal();
 	DWORD capture_by_input();
 	DWORD render_by_input();
+	DWORD render_audio_by_input();
+	DWORD start_audio_output();
 	static void init();
 	static void exit();
 	static bool refresh_devices();
@@ -98,6 +103,9 @@ public:
 	bool get_audio_sample_rate(int* p_sample_rate);
 	bool get_audio_bit_per_sample(int* p_bit_per_sample);
 	bool get_mirror_and_reverse(bool* p_is_mirror, bool* p_is_reverse);
+
+	 void setFormat(WAVEFORMATEX* pwfx) ;
+	 bool LoadData(UINT32 bufferFrameCount, BYTE* pData, DWORD* flags) ;
 	CRingBuffer* m_p_video_buffer;
 	CRingBuffer* m_p_audio_buffer;
 protected:
@@ -111,7 +119,8 @@ protected:
 	int                             m_audio_sample_rate;
 	int                             m_audio_channel_num;
 	int                             m_audio_bit_per_sample;
-
+	DirectSoundAudioRendererComPtr	m_audio_rendrer;
+	AnAudioSourceComPtr				m_audio_device;
 
 	bool check_video_buffer();
 	bool check_audio_buffer();
@@ -161,6 +170,8 @@ private:
 	HANDLE  m_signal_thread;
 	HANDLE	m_video_thread;
 	HANDLE	m_render_thread;
+	HANDLE  m_audio_render_thread;
+	HANDLE  m_start_audio_output_thread;
 	CString m_name;
 	timingclocktime_t m_previousTimingClockFrameTime = TIMING_CLOCK_TIME_INVALID;
 
@@ -172,6 +183,9 @@ private:
 
 	// If false this will not send any more frames out.
 	std::atomic_bool m_outputCaptureData = false;
+
+	std::atomic_bool m_outputAudioCaptureData = false;
+
 
 	// This is set if the card is capturing, can have only one input supports in here for now.
 	// (This implies we support only one callback whereas the hardware supports this per input.)

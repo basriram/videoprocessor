@@ -163,6 +163,7 @@
   <ItemGroup>
     <ClInclude Include="ACaptureDevice.h" />
     <ClInclude Include="ACaptureDeviceDiscoverer.h" />
+    <ClInclude Include="AnAudioSource.h" />
     <ClInclude Include="BitDepth.h" />
     <ClInclude Include="blackmagic_decklink\BlackMagicDeckLinkCaptureDevice.h" />
     <ClInclude Include="blackmagic_decklink\BlackMagicDeckLinkCaptureDeviceDiscoverer.h" />
@@ -170,6 +171,7 @@
     <ClInclude Include="CaptureInput.h" />
     <ClInclude Include="cie.h" />
     <ClInclude Include="ColorSpace.h" />
+    <ClInclude Include="DirectSoundAudioRenderer.h" />
     <ClInclude Include="DisplayMode.h" />
     <ClInclude Include="ColorFormat.h" />
     <ClInclude Include="EOTF.h" />
@@ -219,6 +221,7 @@
   <ItemGroup>
     <ClCompile Include="ACaptureDevice.cpp" />
     <ClCompile Include="ACaptureDeviceDiscoverer.cpp" />
+    <ClCompile Include="AnAudioSource.cpp" />
     <ClCompile Include="BitDepth.cpp" />
     <ClCompile Include="blackmagic_decklink\BlackMagicDeckLinkCaptureDevice.cpp" />
     <ClCompile Include="blackmagic_decklink\BlackMagicDeckLinkCaptureDeviceDiscoverer.cpp" />
@@ -226,6 +229,7 @@
     <ClCompile Include="CaptureInput.cpp" />
     <ClCompile Include="cie.cpp" />
     <ClCompile Include="ColorSpace.cpp" />
+    <ClCompile Include="DirectSoundAudioRenderer.cpp" />
     <ClCompile Include="DisplayMode.cpp" />
     <ClCompile Include="ColorFormat.cpp" />
     <ClCompile Include="EOTF.cpp" />

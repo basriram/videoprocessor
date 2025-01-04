@@ -36,10 +36,9 @@ void MagewellProCaptureDeviceDiscoverer::Start()
 {
 //	if (m_deckLinkDiscovery)
 	//	throw std::runtime_error("Discoverer already started");
-	ACaptureDeviceComPtr captureDevice;
 	m_p_capture = new MagewellProCaptureDevice();
 	m_p_capture->refresh_devices();
-	m_p_capture->AddRef();
+	//m_p_capture->AddRef();
 	captureDevice.Attach(m_p_capture);
 
 	m_captureDeviceMap[m_p_capture] = captureDevice;
@@ -58,7 +57,7 @@ void MagewellProCaptureDeviceDiscoverer::Stop()
 
 	// Send CaptureDeviceLost for all known
 	m_p_capture->StopCapture();
-
+	captureDevice.Detach();
 }
 
 

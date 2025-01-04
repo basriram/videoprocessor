@@ -41,6 +41,8 @@ public:
 
 private:
 	MagewellProCaptureDevice* m_p_capture;
+	ACaptureDeviceComPtr captureDevice;
+	DirectSoundAudioRendererComPtr audioRenderer;
 	// Maps between the IDeckLink ptr and the capture device
 	std::map<MagewellProCaptureDevice*, ACaptureDeviceComPtr> m_captureDeviceMap;
 

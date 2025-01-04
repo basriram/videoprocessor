@@ -30,6 +30,9 @@
 #define DBG_NEW new
 #endif
 static const timingclocktime_t MAGEWELL_CLOCK_MAX_TICKS_SECOND = 10000000LL;  // us
+#define REFTIMES_PER_SEC  10000000
+#define REFTIMES_PER_MILLISEC  10000
+
 
 
 //
@@ -40,10 +43,13 @@ static const timingclocktime_t MAGEWELL_CLOCK_MAX_TICKS_SECOND = 10000000LL;  //
 MagewellProCaptureDevice::MagewellProCaptureDevice() 
 {
 	MWCaptureInitInstance();
-
-
 	m_p_video_buffer = NULL;
 	m_p_audio_buffer = NULL;
+	
+	DirectSoundAudioRenderer* audioRenderer = new DirectSoundAudioRenderer();
+	m_audio_rendrer.Attach(audioRenderer);
+	m_audio_device.Attach(this);
+	m_audio_rendrer->initialize(m_audio_device);
 
 	m_is_start = false;
 	m_frame_duration = 0;
@@ -95,13 +101,14 @@ MagewellProCaptureDevice::MagewellProCaptureDevice()
 	m_signal_thread = NULL;
 	m_video_thread = NULL;
 	m_render_thread = NULL;
-
-	// Get current capture id
+	m_audio_render_thread = NULL;
+	m_start_audio_output_thread = NULL;
+		// Get current capture id
 	LONGLONG captureInputId;
 	captureInputId = 0;
 
 	// Build capture inputs
-	m_captureInputSet.push_back(CaptureInput(captureInputId, CaptureInputType::HDMI, TEXT("HDMI")));
+	m_captureInputSet.push_back(CaptureInput(static_cast<CaptureInputId>(captureInputId), CaptureInputType::S_VIDEO, TEXT("HDMI")));
 	ResetVideoState();
 	set_device(0);
 	m_state = CaptureDeviceState::CAPTUREDEVICESTATE_UNKNOWN;
@@ -133,14 +140,19 @@ MagewellProCaptureDevice::~MagewellProCaptureDevice()
 		printf("SetEvent failed (%d)\n", GetLastError());
 	}
 
-	HANDLE handle[3];
+	HANDLE handle[5];
 	handle[0] = m_signal_thread;
 	handle[1] = m_video_thread;
 	handle[2] = m_render_thread;
-	WaitForMultipleObjects(3, handle, TRUE, 500);
+	handle[3] = m_audio_render_thread;
+	handle[4] = m_start_audio_output_thread;
+	WaitForMultipleObjects(5, handle, TRUE, 500);
 	//CloseHandle(signalLockedEvent);
 	//CloseHandle(frameAvailableEvent);
 	//CloseHandle(interruptEvent);
+
+	m_audio_device.Detach();
+	m_audio_rendrer.Detach();
 
 /*
 	if (m_video_thread) {
@@ -193,7 +205,7 @@ void pin_device_name(MWCAP_CHANNEL_INFO channel_info, char* p_device_name)
 		sprintf_s(p_device_name, 30, "%d-%d %s", channel_info.byBoardIndex, channel_info.byChannelIndex, channel_info.szProductName);
 	}
 	else {
-		sprintf_s(p_device_name, 30, "%d %s", channel_info.byBoardIndex, channel_info.szProductName);
+		sprintf_s(p_device_name, 30, "%s", channel_info.szProductName);
 	}
 }
 bool MagewellProCaptureDevice::get_device_name_by_index(int index, char* p_device_name)
@@ -288,15 +300,33 @@ bool MagewellProCaptureDevice::check_video_buffer()
         }
         DWORD stride = FOURCC_CalcMinStride(m_mw_fourcc, m_width, 2);
         DWORD frame_size = FOURCC_CalcImageSize(m_mw_fourcc, m_width, m_height, stride);
-        return m_p_video_buffer->set_property(10, frame_size);
+        return m_p_video_buffer->set_property(2, frame_size);
     }
     return true;
+}
+
+bool MagewellProCaptureDevice::check_audio_buffer()
+{
+	if ((!m_user_audio_buffer) && (NULL == m_p_audio_buffer)) {
+		m_p_audio_buffer = DBG_NEW CRingBuffer();
+		if (NULL == m_p_audio_buffer) {
+			return false;
+		}
+		hnsRequestedDuration = (REFERENCE_TIME)((double)REFTIMES_PER_SEC / pwfx->nSamplesPerSec * nFrames + 0.5);
+
+		DWORD stride = FOURCC_CalcMinStride(m_mw_fourcc, m_width, 2);
+		DWORD frame_size = FOURCC_CalcImageSize(m_mw_fourcc, m_width, m_height, stride);
+		return m_p_audio_buffer->set_property(2, frame_size);
+	}
+	return true;
 }
 
 bool MagewellProCaptureDevice::set_mirror_and_reverse(bool is_mirror, bool is_reverse)
 {
 	return true;
 }
+
+
 bool MagewellProCaptureDevice::get_mirror_and_reverse(bool *p_is_mirror, bool *p_is_reverse)
 {
 	if ((m_is_mirror < 0) || (m_is_reverse < 0)) {
@@ -397,8 +427,6 @@ bool MagewellProCaptureDevice::CanCapture()
 }
 
 
-
-
 DWORD WINAPI video_capture_pro(LPVOID p_param)
 {
 	MagewellProCaptureDevice* p_class = (MagewellProCaptureDevice*)p_param;
@@ -409,6 +437,19 @@ DWORD WINAPI video_render_pro(LPVOID p_param)
 {
 	MagewellProCaptureDevice* p_class = (MagewellProCaptureDevice*)p_param;
 	return p_class->render_by_input();
+}
+
+DWORD WINAPI audio_render_pro(LPVOID p_param)
+{
+	MagewellProCaptureDevice* p_class = (MagewellProCaptureDevice*)p_param;
+	return p_class->render_audio_by_input();
+}
+
+DWORD WINAPI start_audio_output_thread(LPVOID p_param)
+{
+	MagewellProCaptureDevice* p_class = (MagewellProCaptureDevice*)p_param;
+	return p_class->start_audio_output();
+
 }
 
 
@@ -433,8 +474,29 @@ void MagewellProCaptureDevice::StartCapture() {
 		printf("render video failed\n ");
 		return ;
 	}
+
+	if (m_outputAudioCaptureData.load(std::memory_order_acquire))
+		throw std::runtime_error("StartCapture() callbed but already started");
+
+	if (!check_audio_buffer()) {
+		printf("chenck audio buffer fail\n");
+		return;
+	}
+	m_audio_capturing = true;
+	m_audio_render_thread = CreateThread(NULL, 0, audio_render_pro, (LPVOID)this, 0, NULL);
+	if (NULL == m_audio_render_thread) {
+		printf("render audio failed\n ");
+		return;
+	}
+
+	m_start_audio_output_thread = CreateThread(NULL, 0, start_audio_output_thread, (LPVOID)this, 0, NULL);
+	if (NULL == m_start_audio_output_thread) {
+		printf("output audio failed\n ");
+		return;
+	}
 	// From here on out data can egress
 	m_outputCaptureData.store(true, std::memory_order_release);
+	m_outputAudioCaptureData.store(true, std::memory_order_release);
 
 }		
 
@@ -506,6 +568,24 @@ DWORD MagewellProCaptureDevice::check_input_signal()
 	return 1;
 }
 
+void MagewellProCaptureDevice::setFormat(WAVEFORMATEX* pfmx) {
+
+
+
+}
+
+bool MagewellProCaptureDevice::LoadData(UINT32 bufferCount, BYTE* data, DWORD* flag) {
+	st_frame_t* p_frame = NULL;
+	if (m_outputAudioCaptureData.load(std::memory_order_acquire)) {
+		p_frame = m_p_audio_buffer->get_frame_to_render();
+		if (p_frame != NULL && data!=NULL)
+			memcpy(data, p_frame->p_buffer, p_frame->frame_len);
+		else
+			return false;
+	}
+	return true;
+}
+
 
 DWORD MagewellProCaptureDevice::render_by_input() {
 
@@ -531,6 +611,77 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 	return 1;
 }
 
+DWORD MagewellProCaptureDevice::start_audio_output() {
+
+	HANDLE events[2] = { interruptEvent, frameAvailableEvent };
+	while (m_outputAudioCaptureData.load(std::memory_order_acquire)) {
+		if (WaitForMultipleObjects(2, events, FALSE, INFINITE) == 0)
+			continue;
+		m_audio_rendrer->PlayExclusiveStream();
+	}
+	return 0;
+}
+
+DWORD MagewellProCaptureDevice::render_audio_by_input() {
+	printf("audio capture in\n");
+	HANDLE capture_event = CreateEvent(NULL, FALSE, FALSE, NULL);
+	if (NULL == capture_event) {
+		printf("create event fail\n");
+		return 1;
+	}
+	if (MWStartAudioCapture(m_channel_handle) != MW_SUCCEEDED) {
+		CloseHandle(capture_event);
+		printf("start audio capture fail\n");
+		return 1;
+	}
+	HNOTIFY notify = MWRegisterNotify(m_channel_handle, capture_event, MWCAP_NOTIFY_AUDIO_SIGNAL_CHANGE | MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED);
+	if (notify == NULL) {
+		printf("register notify fail\n");
+		goto end_and_free;
+	}
+	while (m_outputAudioCaptureData.load(std::memory_order_acquire)) {
+		if (WaitForSingleObject(capture_event, 100)) {
+			continue;
+		}
+		ULONGLONG notify_status = 0LL;
+		MWGetNotifyStatus(m_channel_handle, notify, &notify_status);
+
+		if (notify_status & MWCAP_NOTIFY_AUDIO_FRAME_BUFFERED) {
+			do {
+				MWCAP_AUDIO_CAPTURE_FRAME audio_frame;
+				if (MWCaptureAudioFrame(m_channel_handle, &audio_frame) != MW_SUCCEEDED) {
+					break;
+				}
+				st_frame_t* p_frame = m_p_audio_buffer->get_buffer_to_fill();
+				if (NULL == p_frame) {
+					continue;
+				}
+				int byte_per_sample = m_audio_bit_per_sample / 8;
+				int offset = (sizeof(DWORD) - byte_per_sample) * 8;
+				p_frame->ts = audio_frame.llTimestamp / 10000;
+				p_frame->frame_len = m_audio_channel_num * MWCAP_AUDIO_SAMPLES_PER_FRAME * byte_per_sample;
+				DWORD* p_channel_data[MWCAP_AUDIO_MAX_NUM_CHANNELS] = { audio_frame.adwSamples, audio_frame.adwSamples + 4, audio_frame.adwSamples + 1,
+					audio_frame.adwSamples + 5, audio_frame.adwSamples + 2, audio_frame.adwSamples + 6, audio_frame.adwSamples + 3, audio_frame.adwSamples + 7 };
+				unsigned char* p_audio = p_frame->p_buffer;
+				for (int i = 0; i < MWCAP_AUDIO_SAMPLES_PER_FRAME; i++) {
+					for (int j = 0; j < m_audio_channel_num; j++) {
+						DWORD date = *p_channel_data[j] >> offset;//audio_frame.adwSamples[read_pos[j]];
+						p_channel_data[j] += 8;
+						memcpy(p_audio, &date, byte_per_sample);
+						p_audio += byte_per_sample;
+					}
+				}
+				m_p_audio_buffer->buffer_filled();
+			} while (m_audio_capturing);
+		}
+	}
+	printf("audio capture out\n");
+	MWUnregisterNotify(m_channel_handle, notify);
+end_and_free:
+	MWStopAudioCapture(m_channel_handle);
+	CloseHandle(capture_event);
+	return 1;
+}
 
 DWORD MagewellProCaptureDevice::capture_by_input() {
 
@@ -682,16 +833,23 @@ end_and_free:
 		// Stop egressing data
 		m_outputCaptureData.store(false, std::memory_order_release);
 
+		if (m_capture_audio && !m_outputAudioCaptureData.load(std::memory_order_acquire))
+			throw std::runtime_error("StopCapture() called while not started");
+
+		m_outputAudioCaptureData.store(false, std::memory_order_release);
+
 		m_video_capturing = false;
 
 		if (!SetEvent(interruptEvent))
 		{
 			printf("SetEvent failed (%d)\n", GetLastError());
 		}
-		HANDLE handle[2];
+		HANDLE handle[4];
 		handle[0] = m_video_thread;
 		handle[1] = m_render_thread;
-		WaitForMultipleObjects(2, handle, TRUE, INFINITE);
+		handle[2] = m_audio_render_thread;
+		handle[3] = m_start_audio_output_thread;
+		WaitForMultipleObjects(4, handle, TRUE, 500);
 		UpdateState(CAPTUREDEVICESTATE_READY);
 		if (m_p_video_buffer != NULL) {
 			delete m_p_video_buffer;
@@ -1089,6 +1247,48 @@ HRESULT STDMETHODCALLTYPE MagewellProCaptureDevice::VideoInputFormatChanged()
 		}
 	}
 
+	if (m_capture_audio) {
+		DbgLog((LOG_TRACE, 1, TEXT("MagewellProCaptureDevice::VideoInputFormatChanged(): Audio Checking")));
+		MWCAP_AUDIO_SIGNAL_STATUS	audio_signal_status;
+		MWGetAudioSignalStatus(m_channel_handle, &audio_signal_status);
+		if (!m_use_common_api && audio_signal_status.wChannelValid) {
+			m_audio_sample_rate = audio_signal_status.dwSampleRate;
+		}
+		m_use_common_api = true;
+		if (m_use_common_api) {
+			AUDIO_FORMAT_INFO* p_format = NULL;
+			int count = 0;
+			bool have_format = false;
+			if (!MWGetAudioCaptureSupportFormat(m_channel_handle, MWCAP_AUDIO_CAPTURE_NODE_DEFAULT, NULL, &count)) {
+				return 1;
+			}
+			if (count) {
+				p_format = (AUDIO_FORMAT_INFO*)malloc(count * sizeof(AUDIO_FORMAT_INFO));
+			}
+			else {
+				return 1;
+			}
+			if (!MWGetAudioCaptureSupportFormat(m_channel_handle, MWCAP_AUDIO_CAPTURE_NODE_DEFAULT, p_format, &count)) {
+				if (p_format) {
+					free(p_format);
+				}
+				return 1;
+			}
+			for (int i = 0; i < count; i++) {
+				if (m_audio_sample_rate == p_format[i].nSamplerate) {
+					have_format = true;
+					break;
+				}
+			}
+			if (!have_format && count) {
+				m_audio_sample_rate = p_format[0].nSamplerate;
+			}
+			if (p_format) {
+				free(p_format);
+			}
+		}
+	}
+
 	if (videoFormatChanged)
 	{
 		DbgLog((LOG_TRACE, 1, TEXT("MagewellProCaptureDevice::VideoInputFormatChanged(): detected change")));
@@ -1113,6 +1313,7 @@ HRESULT STDMETHODCALLTYPE MagewellProCaptureDevice::VideoInputFormatChanged()
 
 	return S_OK;
 }
+
 
 
 

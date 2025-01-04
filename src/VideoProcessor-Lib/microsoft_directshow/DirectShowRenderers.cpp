@@ -34,7 +34,7 @@ void DirectShowVideoRendererIds(std::vector<RendererId>& rendererIds)
 
 	GUID arrayInTypes[2];
 	arrayInTypes[0] = MEDIATYPE_Video;
-	arrayInTypes[1] = GUID_NULL;
+	arrayInTypes[1] = MEDIATYPE_Audio;
 
 	hr = pMapper->EnumMatchingFilters(
 		&pEnum,

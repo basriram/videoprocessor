@@ -35,15 +35,15 @@ void DirectShowVideoRendererIds(std::vector<RendererId>& rendererIds)
 		throw std::runtime_error("Failed to instantiate the filter mapper");
 
 	GUID arrayInTypes[2];
-	arrayInTypes[0] = MEDIATYPE_Video;
+	arrayInTypes[0] = GUID_NULL;  //MEDIATYPE_Audio;
 	arrayInTypes[1] = GUID_NULL;
-
+	 
 	hr = pMapper->EnumMatchingFilters(
 		&pEnum,
 		0,                  // Reserved.
-		TRUE,               // Use exact match?
+		FALSE,               // Use exact match?
 		MERIT_DO_NOT_USE,   // Minimum merit.
-		TRUE,               // At least one input pin?
+		FALSE,               // At least one input pin?
 		1,                  // Number of major type/subtype pairs for input.
 		arrayInTypes,       // Array of major type/subtype pairs for input.
 		nullptr,               // Input medium.
