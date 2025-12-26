@@ -19,12 +19,12 @@ extern "C" {
 
 #include "VideoProcessorApp.h"
 
-#define DEBUG
-#define _DEBUG
-#define _TRACE
-#define TRACE
-#define _CRTDBG_MAP_ALLOC
-#define _CRTDBG_MAP_ALLOC
+//#define DEBUG
+//#define _DEBUG
+//#define _TRACE
+//#define TRACE
+//#define _CRTDBG_MAP_ALLOC
+//#define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
 #include <crtdbg.h>
 

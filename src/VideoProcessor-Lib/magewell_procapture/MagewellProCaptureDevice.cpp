@@ -21,7 +21,7 @@
 
 #include "MagewellProCaptureDevice.h"
 #include "MagewellVideoFrame.h"
-#define _DEBUG
+ //#define _DEBUG
 #ifdef _DEBUG
 #define DBG_NEW new ( _NORMAL_BLOCK , __FILE__ , __LINE__ )
  // Replace _NORMAL_BLOCK with _CLIENT_BLOCK if you want the
@@ -386,7 +386,21 @@ bool MagewellProCaptureDevice::get_device_name(char *p_device_name)
 CString MagewellProCaptureDevice::GetName()
 {
 	CString name(_T("Magewell pro card"));
-	get_device_name((char*)(LPCTSTR)name);
+//	CString name;
+
+//	CComBSTR deviceNameBSTR;
+//	if (m_deckLink->GetDisplayName(&deviceNameBSTR) == S_OK)
+//	{
+//		name = CString(deviceNameBSTR);
+//		::SysFreeString(deviceNameBSTR);
+//	}
+//	else
+//	{
+//		name = _T("DeckLink");
+//	}
+
+	//return name;
+	//get_device_name((char*)(LPCTSTR)name);
 	return name;
 }
 
