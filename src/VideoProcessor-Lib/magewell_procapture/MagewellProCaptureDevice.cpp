@@ -75,7 +75,7 @@ MagewellProCaptureDevice::MagewellProCaptureDevice()
 
 	m_bottom_up = false;//
 	m_process_switchs = 0;//
-	m_parital_notify = 0;//0
+	m_parital_notify = 1;// Enable partial notification for low-latency capture
 	m_OSD_image = NULL;//NULL
 	m_p_OSD_rects = NULL;//NULL
 	m_OSD_rects_num = 0;//0
@@ -526,12 +526,29 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 	printf("render video by input in\n");
 	st_frame_t* p_frame = NULL;
 	MagewellVideoFrame::MagewellVideoFrameComPtr  mVideoFrame;
-	int frame_wait_time = 25;
+	DWORD frame_wait_time = 50;  // Reduced timeout for more responsive handling
 	HANDLE events[2] = { interruptEvent, frameAvailableEvent };
 
 	while (m_outputCaptureData.load(std::memory_order_acquire)) {
-		if (WaitForMultipleObjects(2, events, FALSE, INFINITE) == 0)
+		DWORD wait_result = WaitForMultipleObjects(2, events, FALSE, frame_wait_time);
+		if (wait_result == WAIT_OBJECT_0) {
+			// Interrupted
 			continue;
+		}
+		if (wait_result == WAIT_TIMEOUT) {
+			// Timeout - check if there are frames available
+			p_frame = m_p_video_buffer->get_frame_to_render();
+			if (p_frame != NULL) {
+				mVideoFrame = DBG_NEW MagewellVideoFrame();
+				const void* data = (void*)p_frame->p_buffer;
+				VideoFrame vpVideoFrame(
+					data, p_frame->frame_len,
+					(timingclocktime_t)p_frame->ts, mVideoFrame);
+				m_callback->OnCaptureDeviceVideoFrame(vpVideoFrame);
+			}
+			continue;
+		}
+		// Event signaled - process frame
 		mVideoFrame = DBG_NEW MagewellVideoFrame();
 		p_frame = m_p_video_buffer->get_frame_to_render();
 		if (p_frame != NULL) {

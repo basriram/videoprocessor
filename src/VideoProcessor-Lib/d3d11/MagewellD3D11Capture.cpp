@@ -26,6 +26,10 @@ extern "C" {
     };
 }
 
+// IID for ID3D11KeyedMutex (defined in d3d11.h)
+// {d8049659-3972-4608-a698-cf1690510a18}
+static const GUID IID_ID3D11KeyedMutex = { 0xd8049659, 0x3972, 0x4608, { 0xa6, 0x98, 0xcf, 0x16, 0x90, 0x51, 0x0a, 0x18 } };
+
 MagewellD3D11Capture::MagewellD3D11Capture()
 {
 }
@@ -137,7 +141,8 @@ HRESULT MagewellD3D11Capture::AcquireMutex(UINT index, DWORD timeoutMs)
 
     // Cast to ID3D11KeyedMutex and acquire
     ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(pMutex);
-    return pKeyedMutex->AcquireSync(0, timeoutMs);
+    HRESULT hr = pKeyedMutex->AcquireSync(0, timeoutMs);
+    return hr;
 }
 
 HRESULT MagewellD3D11Capture::ReleaseMutex(UINT index)
@@ -157,7 +162,8 @@ HRESULT MagewellD3D11Capture::ReleaseMutex(UINT index)
 
     // Cast to ID3D11KeyedMutex and release
     ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(pMutex);
-    return pKeyedMutex->ReleaseSync(0);
+    pKeyedMutex->ReleaseSync(0);
+    return S_OK;
 }
 
 void MagewellD3D11Capture::ProcessCapturedFrame()

@@ -22,6 +22,10 @@ extern "C" {
     };
 }
 
+// IID for ID3D11KeyedMutex (defined in d3d11.h)
+// {d8049659-3972-4608-a698-cf1690510a18}
+static const GUID IID_ID3D11KeyedMutex = { 0xd8049659, 0x3972, 0x4608, { 0xa6, 0x98, 0xcf, 0x16, 0x90, 0x51, 0x0a, 0x18 } };
+
 // Helper macro for FourCC encoding (little-endian)
 #define MAKE_FOURCC(a, b, c, d) \
     ((DWORD)(BYTE)(a) | ((DWORD)(BYTE)(b) << 8) | ((DWORD)(BYTE)(c) << 16) | ((DWORD)(BYTE)(d) << 24))
@@ -177,6 +181,18 @@ HRESULT D3D11TexturePool::CreateTextures()
             sharedTexture.dxgiResource->Release();
             sharedTexture.texture->Release();
             return hr;
+        }
+        
+        // Query the keyed mutex interface if enabled
+        if (m_config.useKeyedMutex)
+        {
+            hr = sharedTexture.texture->QueryInterface(IID_ID3D11KeyedMutex,
+                reinterpret_cast<void**>(&sharedTexture.keyedMutex));
+            if (FAILED(hr))
+            {
+                // Keyed mutex not available, but continue without it
+                sharedTexture.keyedMutex = nullptr;
+            }
         }
         
         m_textures.push_back(sharedTexture);

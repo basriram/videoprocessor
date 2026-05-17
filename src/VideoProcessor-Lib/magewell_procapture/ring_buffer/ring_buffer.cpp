@@ -56,6 +56,7 @@ bool CRingBuffer::set_property(int buffer_num, int buffer_size)
 // Get current queue depth (number of frames waiting to be rendered)
 int CRingBuffer::GetQueueDepth()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (m_write_num == 0 || m_render_read_num < 0) {
         return 0;
     }
@@ -72,14 +73,14 @@ int CRingBuffer::GetDroppedFrameCount()
 // Reset statistics
 void CRingBuffer::ResetStatistics()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_dropped_frames.store(0, std::memory_order_relaxed);
 }
 
 st_frame_t *CRingBuffer::get_buffer_to_fill()
 {
-    if (m_writing) {
-        return m_p_frame + (m_write_num % m_buffer_num);
-    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
     if (m_buffer_num == 0) {
         return NULL;
     }
@@ -106,6 +107,7 @@ st_frame_t *CRingBuffer::get_buffer_to_fill()
 
 void CRingBuffer::buffer_filled()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (m_writing) {
         m_write_num++;
         m_writing = false;
@@ -114,6 +116,8 @@ void CRingBuffer::buffer_filled()
 
 st_frame_t * CRingBuffer::get_frame_to_render()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
     if (m_write_num == 0) {
         return NULL;
     }
@@ -122,7 +126,7 @@ st_frame_t * CRingBuffer::get_frame_to_render()
         m_rending = false;
     }
     else if (m_render_read_num < 0) {
-        m_render_read_num = (m_write_num ? m_write_num:1) - 1;
+        m_render_read_num = (m_write_num ? m_write_num : 1) - 1;
     }
     if (m_write_num == m_render_read_num) {
         return NULL;
@@ -136,6 +140,8 @@ st_frame_t * CRingBuffer::get_frame_to_render()
 
 st_frame_t * CRingBuffer::get_frame_to_encode()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
     if (m_write_num == 0) {
         return NULL;
     }
@@ -157,14 +163,17 @@ st_frame_t * CRingBuffer::get_frame_to_encode()
 }
 void CRingBuffer::stop_render()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_render_read_num = -1;
 }
 void CRingBuffer::stop_encode()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_encode_read_num = -1;
 }
 st_frame_t *CRingBuffer::get_buffer_by_index(int index)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (index >= m_buffer_num) {
         return NULL;
     }

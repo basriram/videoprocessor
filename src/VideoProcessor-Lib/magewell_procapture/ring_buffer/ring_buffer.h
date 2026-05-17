@@ -1,6 +1,7 @@
 #pragma once
 #include <stdio.h>
 #include <atomic>
+#include <mutex>
 
 typedef struct st_frame {
     unsigned char*p_buffer;
@@ -43,4 +44,7 @@ private:
     
     // Statistics for back-pressure monitoring
     std::atomic<int> m_dropped_frames;
+    
+    // Mutex for thread-safe access to ring buffer state
+    mutable std::mutex m_mutex;
 };
