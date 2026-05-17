@@ -8,13 +8,19 @@
 
 #include <pch.h>
 
+#include <span>
+#include <stdexcept>
 #include "CV210toP010VideoFrameFormatter.h"
 
 //
 // Parts of this are copied from ffmpeg v210dec.c, see /3rdparty/ffmpeg/README.txt for license and attribution
 //
 
+#define PIXELS_PER_PACK 6
+#define BYTES_PER_PACK (4 * sizeof(uint32_t))
 
+// V210_READ_PACK_BLOCK macro - reads 3 values from source and advances pointer
+// Note: This legacy macro uses pointer arithmetic; see FormatVideoFrame for std::span version
 #define V210_READ_PACK_BLOCK(a, b, c) \
     do {                              \
         val  = *src++;                \
@@ -23,12 +29,9 @@
         c = (val >> 20) & 0x3FF;      \
     } while (0)
 
-
-#define P010_WRITE_VALUE(d, v) (*d++ = (v << 6))
-
-
-#define PIXELS_PER_PACK 6
-#define BYTES_PER_PACK (4 * sizeof(uint32_t))
+// P010_WRITE_VALUE macro - writes value to destination and advances pointer
+// Note: This legacy macro uses pointer arithmetic; see FormatVideoFrame for std::span version
+#define P010_WRITE_VALUE(d, v) (*d++ = static_cast<uint16_t>(v << 6))
 
 
 void CV210toP010VideoFrameFormatter::OnVideoState(VideoStateComPtr& videoState)
@@ -72,57 +75,87 @@ bool CV210toP010VideoFrameFormatter::FormatVideoFrame(
     const uint32_t aligned_width = ((m_width + 47) / 48) * 48;
     const uint32_t stride = aligned_width * 8 / 3;
 
-    uint16_t* dstY = (uint16_t *)outBuffer;
-    uint16_t* dstUV = (uint16_t*)(outBuffer + ((ptrdiff_t)pixels * sizeof(uint16_t)));
+    // Use std::span for safer array access instead of raw pointer arithmetic
+    const std::span<const uint32_t> srcSpan(
+        static_cast<const uint32_t*>(inFrame.GetData()),
+        (pixels / PIXELS_PER_PACK * BYTES_PER_PACK * m_height) / sizeof(uint32_t));
+
+    // Create output spans for Y and UV planes
+    std::span<uint16_t> dstYSpan(reinterpret_cast<uint16_t*>(outBuffer), pixels);
+    std::span<uint16_t> dstUVSpan(
+        reinterpret_cast<uint16_t*>(outBuffer + static_cast<std::ptrdiff_t>(pixels * sizeof(uint16_t))),
+        pixels / 2);
 
     const uint32_t packsPerLine = m_width / PIXELS_PER_PACK;
+    const uint32_t srcStride = stride / sizeof(uint32_t);  // Convert byte stride to uint32_t stride
+    const uint32_t dstYStride = m_width;
+    const uint32_t dstUVStride = m_width / 2;
 
     for (uint32_t line = 0; line < m_height; line++)
     {
-        const uint32_t* src = (const uint32_t*)((const BYTE *)inFrame.GetData() + (ptrdiff_t)(line * stride));  // Lines start at 128 byte alignment
+        const uint32_t srcLineOffset = line * srcStride;
+
+        // Output indices for Y and UV planes
+        uint32_t dstYIdx = line * dstYStride;
+        uint32_t dstUVIdx = (line / 2) * dstUVStride;
 
         for (uint32_t pack = 0; pack < packsPerLine; pack++)
         {
             uint32_t val;
             uint16_t u, y1, y2, v;
 
+            // Read 6 pixels per pack using std::span indexing
+            val = srcSpan[srcLineOffset + pack * 4 + 0];
+            u = static_cast<uint16_t>(val & 0x3FF);
+            y1 = static_cast<uint16_t>((val >> 10) & 0x3FF);
+            v = static_cast<uint16_t>((val >> 20) & 0x3FF);
+
+            val = srcSpan[srcLineOffset + pack * 4 + 1];
+            y1 = static_cast<uint16_t>(val & 0x3FF);
+            u = static_cast<uint16_t>((val >> 10) & 0x3FF);
+            y2 = static_cast<uint16_t>((val >> 20) & 0x3FF);
+
+            val = srcSpan[srcLineOffset + pack * 4 + 2];
+            v = static_cast<uint16_t>(val & 0x3FF);
+            y1 = static_cast<uint16_t>((val >> 10) & 0x3FF);
+            u = static_cast<uint16_t>((val >> 20) & 0x3FF);
+
+            val = srcSpan[srcLineOffset + pack * 4 + 3];
+            y1 = static_cast<uint16_t>(val & 0x3FF);
+            v = static_cast<uint16_t>((val >> 10) & 0x3FF);
+            y2 = static_cast<uint16_t>((val >> 20) & 0x3FF);
+
             if (line % 2 == 0)
             {
-                V210_READ_PACK_BLOCK(u, y1, v);
-                P010_WRITE_VALUE(dstUV, u);
-                P010_WRITE_VALUE(dstY, y1);
-                P010_WRITE_VALUE(dstUV, v);
+                // Even line: interleaved Y and UV
+                dstUVSpan[dstUVIdx++] = static_cast<uint16_t>(u << 6);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y1 << 6);
+                dstUVSpan[dstUVIdx++] = static_cast<uint16_t>(v << 6);
 
-                V210_READ_PACK_BLOCK(y1, u, y2);
-                P010_WRITE_VALUE(dstY, y1);
-                P010_WRITE_VALUE(dstUV, u);
-                P010_WRITE_VALUE(dstY, y2);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y1 << 6);
+                dstUVSpan[dstUVIdx++] = static_cast<uint16_t>(u << 6);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y2 << 6);
 
-                V210_READ_PACK_BLOCK(v, y1, u);
-                P010_WRITE_VALUE(dstUV, v);
-                P010_WRITE_VALUE(dstY, y1);
-                P010_WRITE_VALUE(dstUV, u);
+                dstUVSpan[dstUVIdx++] = static_cast<uint16_t>(v << 6);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y1 << 6);
+                dstUVSpan[dstUVIdx++] = static_cast<uint16_t>(u << 6);
 
-                V210_READ_PACK_BLOCK(y1, v, y2);
-                P010_WRITE_VALUE(dstY, y1);
-                P010_WRITE_VALUE(dstUV, v);
-                P010_WRITE_VALUE(dstY, y2);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y1 << 6);
+                dstUVSpan[dstUVIdx++] = static_cast<uint16_t>(v << 6);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y2 << 6);
             }
             else
             {
-                V210_READ_PACK_BLOCK(u, y1, v);
-                P010_WRITE_VALUE(dstY, y1);
+                // Odd line: Y only
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y1 << 6);
 
-                V210_READ_PACK_BLOCK(y1, u, y2);
-                P010_WRITE_VALUE(dstY, y1);
-                P010_WRITE_VALUE(dstY, y2);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y1 << 6);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y2 << 6);
 
-                V210_READ_PACK_BLOCK(v, y1, u);
-                P010_WRITE_VALUE(dstY, y1);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y1 << 6);
 
-                V210_READ_PACK_BLOCK(y1, v, y2);
-                P010_WRITE_VALUE(dstY, y1);
-                P010_WRITE_VALUE(dstY, y2);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y1 << 6);
+                dstYSpan[dstYIdx++] = static_cast<uint16_t>(y2 << 6);
             }
         }
     }

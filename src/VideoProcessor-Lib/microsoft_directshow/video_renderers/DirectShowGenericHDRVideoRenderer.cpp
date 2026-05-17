@@ -250,9 +250,8 @@ void DirectShowGenericHDRVideoRenderer::RendererConnect()
 	if (FAILED(m_pRenderer->EnumPins(&pEnum)))
 	{
 		pLiveSourceOutputPin->Release();
-		pRendererInputPin->Release();
 
-		throw std::runtime_error("Failed to get livesource pin enumerator");
+		throw std::runtime_error("Failed to get renderer pin enumerator");
 	}
 
 	if (pEnum->Next(1, &pRendererInputPin, nullptr) != S_OK)

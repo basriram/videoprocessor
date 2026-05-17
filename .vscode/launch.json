@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug VideoProcessor (x64)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/x64/Debug/VideoProcessor-GUI.exe",
+            "args": ["/fullscreen"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "console": "integratedTerminal"
+        }
+    ]
+}

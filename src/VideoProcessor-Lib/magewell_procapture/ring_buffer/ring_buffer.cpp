@@ -13,6 +13,7 @@ CRingBuffer::CRingBuffer()
     m_rending = false;
     m_encoding = false;
     m_writing = false;
+    m_dropped_frames.store(0, std::memory_order_relaxed);
 }
 
 CRingBuffer::~CRingBuffer()
@@ -52,6 +53,28 @@ bool CRingBuffer::set_property(int buffer_num, int buffer_size)
     return true;
 }
 
+// Get current queue depth (number of frames waiting to be rendered)
+int CRingBuffer::GetQueueDepth()
+{
+    if (m_write_num == 0 || m_render_read_num < 0) {
+        return 0;
+    }
+    int depth = (int)(m_write_num - m_render_read_num);
+    return depth > 0 ? depth : 0;
+}
+
+// Get number of dropped frames due to back-pressure
+int CRingBuffer::GetDroppedFrameCount()
+{
+    return m_dropped_frames.load(std::memory_order_relaxed);
+}
+
+// Reset statistics
+void CRingBuffer::ResetStatistics()
+{
+    m_dropped_frames.store(0, std::memory_order_relaxed);
+}
+
 st_frame_t *CRingBuffer::get_buffer_to_fill()
 {
     if (m_writing) {
@@ -60,9 +83,19 @@ st_frame_t *CRingBuffer::get_buffer_to_fill()
     if (m_buffer_num == 0) {
         return NULL;
     }
+    
+    // Back-pressure: Check if render consumer is too far behind
+    // If queue is full, drop oldest frame to make room for new one
     if ((m_render_read_num >= 0) && ((m_write_num - m_render_read_num) >= m_buffer_num)) {
-        return NULL;
+        // Queue is full - drop oldest frame by advancing render_read_num
+        m_render_read_num++;
+        m_dropped_frames.fetch_add(1, std::memory_order_relaxed);
+        // Return the buffer that was just freed up
+        m_writing = true;
+        m_p_frame[m_render_read_num % m_buffer_num].frame_len = 0;
+        return m_p_frame + (m_render_read_num % m_buffer_num);
     }
+    
     if ((m_encode_read_num >= 0) && ((m_write_num - m_encode_read_num) >= m_buffer_num)) {
         return NULL;
     }

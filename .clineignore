@@ -1,0 +1,17 @@
+# Block binary and intermediate build outputs
+.vs/
+x64/
+Debug/
+Release/
+build/
+*.VC.db
+*.opendb
+*.log
+*.tlog
+*.obj
+*.pch
+*.idb
+*.pdb
+*.ilk
+*.exe
+*.dll

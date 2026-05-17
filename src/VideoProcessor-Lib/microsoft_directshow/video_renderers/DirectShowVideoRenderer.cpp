@@ -276,6 +276,9 @@ void DirectShowVideoRenderer::GraphBuild()
 
 	assert(m_videoState);
 
+	if (!m_videoHwnd)
+		throw std::runtime_error("Invalid m_videoHwnd: window handle is null");
+
 	//
 	// Window setup
 	//
