@@ -12,12 +12,13 @@
 #include <LibMWCapture/MWCapture.h>
 
 #include "MagewellD3D11Capture.h"
+#include "../HDRData.h"
+#include "../HDR10Metadata.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
 // Forward declare ID3D11KeyedMutex for keyed mutex operations
-// This interface is defined in d3d11.h but we use it via void* to avoid header conflicts
 extern "C" {
     struct ID3D11KeyedMutex : public IUnknown
     {
@@ -26,9 +27,12 @@ extern "C" {
     };
 }
 
-// IID for ID3D11KeyedMutex (defined in d3d11.h)
-// {d8049659-3972-4608-a698-cf1690510a18}
+// IID for ID3D11KeyedMutex
 static const GUID IID_ID3D11KeyedMutex = { 0xd8049659, 0x3972, 0x4608, { 0xa6, 0x98, 0xcf, 0x16, 0x90, 0x51, 0x0a, 0x18 } };
+
+// Helper macro for FourCC encoding (little-endian)
+#define MAKE_FOURCC(a, b, c, d) \
+    ((DWORD)(BYTE)(a) | ((DWORD)(BYTE)(b) << 8) | ((DWORD)(BYTE)(c) << 16) | ((DWORD)(BYTE)(d) << 24))
 
 MagewellD3D11Capture::MagewellD3D11Capture()
 {
@@ -37,6 +41,39 @@ MagewellD3D11Capture::MagewellD3D11Capture()
 MagewellD3D11Capture::~MagewellD3D11Capture()
 {
     StopCapture();
+    
+    if (m_pContext)
+    {
+        m_pContext->Release();
+        m_pContext = nullptr;
+    }
+    
+    if (m_pDevice)
+    {
+        m_pDevice->Release();
+        m_pDevice = nullptr;
+    }
+}
+
+DXGI_FORMAT MagewellD3D11Capture::GetDXGIFormatFromFourCC(DWORD fourcc)
+{
+    switch (fourcc)
+    {
+        case MAKE_FOURCC('N', 'V', '1', '2'):
+            return DXGI_FORMAT_NV12;
+        case MAKE_FOURCC('P', '0', '1', '0'):
+            return DXGI_FORMAT_P010;
+        case MAKE_FOURCC('P', '2', '1', '0'):
+            return DXGI_FORMAT_P210;
+        case MAKE_FOURCC('Y', 'U', 'Y', '2'):
+            return DXGI_FORMAT_YUY2;
+        case MAKE_FOURCC('R', 'G', 'B', '3'):
+            return DXGI_FORMAT_R8G8B8A8_UNORM;
+        case MAKE_FOURCC('R', 'G', 'B', '4'):
+            return DXGI_FORMAT_R8G8B8A8_UNORM;
+        default:
+            return DXGI_FORMAT_P010;  // Default to 10-bit for HDR
+    }
 }
 
 HRESULT MagewellD3D11Capture::Initialize(UINT width, UINT height, DWORD fourcc, FrameCallback callback)
@@ -52,38 +89,205 @@ HRESULT MagewellD3D11Capture::Initialize(UINT width, UINT height, DWORD fourcc, 
     m_frameCallback = callback;
 
     // Determine DXGI format based on FourCC
-    m_dxgiFormat = D3D11TexturePool::GetDXGIFormat(fourcc);
+    m_dxgiFormat = GetDXGIFormatFromFourCC(fourcc);
     if (m_dxgiFormat == DXGI_FORMAT_UNKNOWN)
     {
-        m_dxgiFormat = DXGI_FORMAT_NV12;  // Default fallback
+        m_dxgiFormat = DXGI_FORMAT_P010;  // Default to 10-bit for HDR
     }
 
     // Configure texture pool for zero-copy capture
-    D3D11TexturePool::TextureConfig config;
-    config.width = width;
-    config.height = height;
-    config.format = m_dxgiFormat;
-    config.poolSize = 3;  // Triple buffering for smooth 4K60
-    config.useKeyedMutex = true;  // Enable keyed mutex for synchronization
+    m_config.width = width;
+    m_config.height = height;
+    m_config.format = m_dxgiFormat;
+    m_config.poolSize = 3;  // Triple buffering for smooth 4K60
+    m_config.useKeyedMutex = true;  // Enable keyed mutex for synchronization
 
-    HRESULT hr = m_texturePool.Initialize(config);
+    // Create D3D11 device
+    HRESULT hr = CreateD3D11Device();
     if (FAILED(hr))
     {
         return hr;
     }
 
-    m_initialized = true;
+    // Create texture pool
+    hr = CreateTexturePool();
+    if (FAILED(hr))
+    {
+        return hr;
+    }
+
+    m_capturing = false;
     return S_OK;
+}
+
+HRESULT MagewellD3D11Capture::CreateD3D11Device()
+{
+    if (m_pDevice != nullptr)
+    {
+        return S_OK;  // Already created
+    }
+
+    D3D_FEATURE_LEVEL featureLevels[] = 
+    {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0
+    };
+
+    UINT createFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+#ifdef _DEBUG
+    createFlags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+
+    HRESULT hr = D3D11CreateDevice(
+        nullptr,                          // Use default adapter
+        D3D_DRIVER_TYPE_HARDWARE,         // Hardware device
+        nullptr,                          // Software device
+        createFlags,
+        featureLevels,
+        ARRAYSIZE(featureLevels),
+        D3D11_SDK_VERSION,
+        &m_pDevice,
+        nullptr,                          // Feature level
+        &m_pContext                       // Device context
+    );
+
+    if (FAILED(hr))
+    {
+        return hr;
+    }
+
+    return S_OK;
+}
+
+HRESULT MagewellD3D11Capture::CreateTexturePool()
+{
+    std::lock_guard<std::mutex> lock(m_textureMutex);
+
+    ReleaseTexturePool();
+
+    DXGI_FORMAT format = m_config.format;
+    if (format == DXGI_FORMAT_UNKNOWN)
+    {
+        format = DXGI_FORMAT_P010;  // Default to 10-bit
+    }
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = m_config.width;
+    desc.Height = m_config.height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
+    if (m_config.useKeyedMutex)
+    {
+        desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    }
+
+    for (UINT i = 0; i < m_config.poolSize; i++)
+    {
+        SharedTexture sharedTexture;
+        sharedTexture.index = i;
+
+        HRESULT hr = m_pDevice->CreateTexture2D(&desc, nullptr, &sharedTexture.texture);
+        if (FAILED(hr))
+        {
+            ReleaseTexturePool();
+            return hr;
+        }
+
+        hr = sharedTexture.texture->QueryInterface(__uuidof(IDXGIResource), 
+            reinterpret_cast<void**>(&sharedTexture.dxgiResource));
+        if (FAILED(hr))
+        {
+            sharedTexture.texture->Release();
+            ReleaseTexturePool();
+            return hr;
+        }
+
+        hr = sharedTexture.dxgiResource->GetSharedHandle(&sharedTexture.sharedHandle);
+        if (FAILED(hr))
+        {
+            sharedTexture.dxgiResource->Release();
+            sharedTexture.texture->Release();
+            ReleaseTexturePool();
+            return hr;
+        }
+
+        // Query the keyed mutex interface if enabled
+        if (m_config.useKeyedMutex)
+        {
+            hr = sharedTexture.texture->QueryInterface(IID_ID3D11KeyedMutex,
+                reinterpret_cast<void**>(&sharedTexture.keyedMutex));
+            if (FAILED(hr))
+            {
+                sharedTexture.keyedMutex = nullptr;
+            }
+        }
+
+        m_textures.push_back(sharedTexture);
+    }
+
+    return S_OK;
+}
+
+void MagewellD3D11Capture::ReleaseTexturePool()
+{
+    for (auto& texture : m_textures)
+    {
+        if (texture.dxgiResource)
+        {
+            texture.dxgiResource->Release();
+            texture.dxgiResource = nullptr;
+        }
+        if (texture.texture)
+        {
+            texture.texture->Release();
+            texture.texture = nullptr;
+        }
+        texture.sharedHandle = INVALID_HANDLE_VALUE;
+    }
+    m_textures.clear();
+}
+
+HRESULT MagewellD3D11Capture::AcquireKeyedMutex(UINT index, DWORD timeoutMs)
+{
+    std::lock_guard<std::mutex> lock(m_textureMutex);
+
+    if (index >= m_textures.size() || m_textures[index].keyedMutex == nullptr)
+    {
+        return S_OK;  // No mutex to acquire
+    }
+
+    ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(m_textures[index].keyedMutex);
+    HRESULT hr = pKeyedMutex->AcquireSync(0, timeoutMs);
+
+    return hr;
+}
+
+void MagewellD3D11Capture::ReleaseKeyedMutex(UINT index)
+{
+    std::lock_guard<std::mutex> lock(m_textureMutex);
+
+    if (index >= m_textures.size() || m_textures[index].keyedMutex == nullptr)
+    {
+        return;
+    }
+
+    ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(m_textures[index].keyedMutex);
+    pKeyedMutex->ReleaseSync(0);
 }
 
 HRESULT MagewellD3D11Capture::StartCapture()
 {
-    if (!m_initialized)
-    {
-        return E_FAIL;
-    }
-
-    if (m_capturing)
+    if (m_capturing.load())
     {
         return S_OK;  // Already capturing
     }
@@ -97,91 +301,58 @@ void MagewellD3D11Capture::StopCapture()
     m_capturing = false;
 }
 
-HANDLE MagewellD3D11Capture::GetTextureSharedHandle(UINT index) const
+std::shared_ptr<HDRData> MagewellD3D11Capture::ParseHDRMetadata()
 {
-    if (!m_initialized || index >= m_texturePool.GetTextureCount())
-    {
-        return INVALID_HANDLE_VALUE;
-    }
-
-    D3D11TexturePool::SharedTexture texture = m_texturePool.GetTexture(index);
-    if (texture.dxgiResource == nullptr)
-    {
-        return INVALID_HANDLE_VALUE;
-    }
-
-    HANDLE sharedHandle = texture.sharedHandle;
+    // This method should be called when HDR infoframe is detected
+    // It parses the Magewell HDMI HDR infoframe and returns HDRData
+    // Implementation depends on integration with MagewellProCaptureDevice
     
-    // Release the references we just got
-    if (texture.texture) texture.texture->Release();
-    if (texture.dxgiResource) texture.dxgiResource->Release();
-
-    return sharedHandle;
+    std::shared_ptr<HDRData> hdrData = std::make_shared<HDRData>();
+    
+    // Placeholder - actual implementation would call MWGetHDMIInfoFramePacket
+    // and parse the HDR infoframe to populate hdrData
+    
+    return hdrData;
 }
 
-D3D11TexturePool::SharedTexture MagewellD3D11Capture::GetTexture(UINT index)
+void MagewellD3D11Capture::ProcessCapturedFrame(UINT textureIndex, LONGLONG timestamp)
 {
-    return m_texturePool.GetTexture(index);
-}
-
-HRESULT MagewellD3D11Capture::AcquireMutex(UINT index, DWORD timeoutMs)
-{
-    if (!m_initialized || index >= m_texturePool.GetTextureCount())
+    if (!m_frameCallback || !m_capturing.load())
     {
-        return E_INVALIDARG;
+        return;
     }
 
-    // Use the D3D11TexturePool's keyed mutex interface
-    void* pMutex = m_texturePool.GetKeyedMutex(index);
-    if (pMutex == nullptr)
+    // Acquire mutex before accessing texture
+    AcquireKeyedMutex(textureIndex, 10);
+
+    // Get shared handle for the texture
+    HANDLE sharedHandle = INVALID_HANDLE_VALUE;
+    if (textureIndex < m_textures.size())
     {
-        // No keyed mutex available, return success
-        return S_OK;
-    }
-
-    // Cast to ID3D11KeyedMutex and acquire
-    ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(pMutex);
-    HRESULT hr = pKeyedMutex->AcquireSync(0, timeoutMs);
-    return hr;
-}
-
-HRESULT MagewellD3D11Capture::ReleaseMutex(UINT index)
-{
-    if (!m_initialized || index >= m_texturePool.GetTextureCount())
-    {
-        return E_INVALIDARG;
-    }
-
-    // Use the D3D11TexturePool's keyed mutex interface
-    void* pMutex = m_texturePool.GetKeyedMutex(index);
-    if (pMutex == nullptr)
-    {
-        // No keyed mutex available, return success
-        return S_OK;
-    }
-
-    // Cast to ID3D11KeyedMutex and release
-    ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(pMutex);
-    pKeyedMutex->ReleaseSync(0);
-    return S_OK;
-}
-
-void MagewellD3D11Capture::ProcessCapturedFrame()
-{
-    if (m_frameCallback && m_capturing)
-    {
-        // Get the current frame index (round-robin through pool)
-        UINT frameIndex = m_currentFrameIndex % m_texturePool.GetTextureCount();
+        sharedHandle = m_textures[textureIndex].sharedHandle;
         
-        // Acquire mutex before processing
-        AcquireMutex(frameIndex);
-        
-        // Deliver frame with texture index for zero-copy rendering
-        m_frameCallback(frameIndex, 0, m_width, m_height);
-        
-        // Release mutex after processing
-        ReleaseMutex(frameIndex);
-        
-        m_currentFrameIndex++;
+        // Update frame key for synchronization
+        m_textures[textureIndex].frameKey = m_frameKey.fetch_add(1);
     }
+
+    // Parse HDR metadata if available
+    std::shared_ptr<HDRData> hdrData = nullptr;
+    if (m_isHDR && m_hdrCallback)
+    {
+        hdrData = ParseHDRMetadata();
+    }
+
+    // Deliver frame via callback
+    m_frameCallback(
+        textureIndex,
+        sharedHandle,
+        m_width,
+        m_height,
+        m_dxgiFormat,
+        timestamp,
+        hdrData
+    );
+
+    // Release mutex after processing
+    ReleaseKeyedMutex(textureIndex);
 }

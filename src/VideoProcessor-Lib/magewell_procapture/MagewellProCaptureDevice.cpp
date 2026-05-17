@@ -413,6 +413,7 @@ bool MagewellProCaptureDevice::CanCapture()
 
 
 
+
 DWORD WINAPI video_capture_pro(LPVOID p_param)
 {
 	MagewellProCaptureDevice* p_class = (MagewellProCaptureDevice*)p_param;
@@ -526,7 +527,9 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 	printf("render video by input in\n");
 	st_frame_t* p_frame = NULL;
 	MagewellVideoFrame::MagewellVideoFrameComPtr  mVideoFrame;
-	DWORD frame_wait_time = 50;  // Reduced timeout for more responsive handling
+	// FIX #4: Reduced timeout from 50ms to 16ms for 4K60 support
+	// 16ms = 1 frame period at 60fps, prevents excessive latency spikes
+	DWORD frame_wait_time = 16;  
 	HANDLE events[2] = { interruptEvent, frameAvailableEvent };
 
 	while (m_outputCaptureData.load(std::memory_order_acquire)) {
@@ -1002,391 +1005,474 @@ end_and_free:
 	{
 
 	}
-HRESULT STDMETHODCALLTYPE MagewellProCaptureDevice::CardStateChanged()
-{
-
-	MWCAP_VIDEO_SIGNAL_STATUS
-		video_signal_status; 
-	MWGetVideoSignalStatus(m_channel_handle, &video_signal_status);
-	switch (video_signal_status.state)
+	HRESULT STDMETHODCALLTYPE MagewellProCaptureDevice::CardStateChanged()
 	{
-	case MWCAP_VIDEO_SIGNAL_NONE:
-	case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
-	case MWCAP_VIDEO_SIGNAL_LOCKING:
-		if (m_display_mode != NULL) {
-			//UpdateState(CAPTUREDEVICESTATE_UNKNOWN);
-			//SendCardStateCallback();
-			m_display_mode = NULL;
-			SendCardStateCallback();
+
+		MWCAP_VIDEO_SIGNAL_STATUS
+			video_signal_status; 
+		MWGetVideoSignalStatus(m_channel_handle, &video_signal_status);
+		switch (video_signal_status.state)
+		{
+		case MWCAP_VIDEO_SIGNAL_NONE:
+		case MWCAP_VIDEO_SIGNAL_UNSUPPORTED:
+		case MWCAP_VIDEO_SIGNAL_LOCKING:
+			if (m_display_mode != NULL) {
+				//UpdateState(CAPTUREDEVICESTATE_UNKNOWN);
+				//SendCardStateCallback();
+				m_display_mode = NULL;
+				SendCardStateCallback();
+			}
+			return 0;
+		case MWCAP_VIDEO_SIGNAL_LOCKED:
+			printf("Input signal status: Locked\n");
+			if (m_state == CAPTUREDEVICESTATE_UNKNOWN)
+				UpdateState(CAPTUREDEVICESTATE_READY);
+
+			if (m_state == CAPTUREDEVICESTATE_READY && video_signal_status.state == MWCAP_VIDEO_SIGNAL_LOCKED) {
+				bool videoFormatChanged = false;
+
+				if (m_width != video_signal_status.cx || m_height != video_signal_status.cy) {
+					m_width = video_signal_status.cx;
+					m_height = video_signal_status.cy;
+					videoFormatChanged = true;
+				}
+
+				if (m_is_interlaced != video_signal_status.bInterlaced || m_frame_duration != video_signal_status.dwFrameDuration) {
+					m_is_interlaced = video_signal_status.bInterlaced;
+					m_frame_duration = video_signal_status.dwFrameDuration;
+					m_signal_frame_duration = video_signal_status.dwFrameDuration;
+					m_ticksPerFrame = (timingclocktime_t)round((1.0 / FPS(m_frame_duration, m_is_interlaced)) * TimingClockTicksPerSecond());
+					videoFormatChanged = true;
+				}
+				if (m_quant_range != video_signal_status.quantRange) {
+					m_quant_range = video_signal_status.quantRange;
+					videoFormatChanged = true;
+				}
+				if (m_color_format != video_signal_status.colorFormat) {
+					m_color_format = video_signal_status.colorFormat;
+					videoFormatChanged = true;
+				}
+
+				MWCAP_INPUT_SPECIFIC_STATUS inputStatus;
+				if ((MWGetInputSpecificStatus(m_channel_handle, &inputStatus) == MW_SUCCEEDED)) {
+					MWCAP_HDMI_SPECIFIC_STATUS hdmiSpecificStatus = inputStatus.hdmiStatus;
+					if (m_bit_depth != hdmiSpecificStatus.byBitDepth) {
+						m_bit_depth = hdmiSpecificStatus.byBitDepth;
+						videoFormatChanged = true;
+					}
+					if (m_pixel_encoding != hdmiSpecificStatus.pixelEncoding) {
+						m_pixel_encoding = hdmiSpecificStatus.pixelEncoding;
+						videoFormatChanged = true;
+					}
+				}
+
+				// Update FourCC based on bit depth for HDR/SDR detection
+				UpdateFourCCFromBitDepth();
+
+				SendCardStateCallback();
+				if (videoFormatChanged) {
+					m_display_mode = TranslateDisplayMode(m_width, m_height, m_is_interlaced, m_frame_duration);
+					SendVideoStateCallback();
+				}
+			//	if (!m_video_capturing)
+			//		StartCapture();
+			}
 		}
 		return 0;
-	case MWCAP_VIDEO_SIGNAL_LOCKED:
-		printf("Input signal status: Locked\n");
-		if (m_state == CAPTUREDEVICESTATE_UNKNOWN)
-			UpdateState(CAPTUREDEVICESTATE_READY);
+	}
 
-		if (m_state == CAPTUREDEVICESTATE_READY && video_signal_status.state == MWCAP_VIDEO_SIGNAL_LOCKED) {
-			bool videoFormatChanged = false;
+	HRESULT STDMETHODCALLTYPE MagewellProCaptureDevice::VideoInputFormatChanged()
+	{
+	//	if (!m_outputCaptureData.load(std::memory_order_acquire))
+		//	return S_OK;
+		MWCAP_VIDEO_SIGNAL_STATUS video_signal_status;
+		MWGetVideoSignalStatus(m_channel_handle, &video_signal_status);
+		if (video_signal_status.state != MWCAP_VIDEO_SIGNAL_LOCKED || m_state == CAPTUREDEVICESTATE_UNKNOWN)
+			return 1;
 
-			if (m_width != video_signal_status.cx || m_height != video_signal_status.cy) {
-				m_width = video_signal_status.cx;
-				m_height = video_signal_status.cy;
+		bool videoFormatChanged = false;
+
+		if (m_width != video_signal_status.cx || m_height != video_signal_status.cy) {
+			m_width = video_signal_status.cx;
+			m_height = video_signal_status.cy;
+			videoFormatChanged = true;
+		}
+
+		if (m_is_interlaced != video_signal_status.bInterlaced || m_frame_duration != video_signal_status.dwFrameDuration) {
+			m_is_interlaced = video_signal_status.bInterlaced;
+			m_frame_duration = video_signal_status.dwFrameDuration;
+			m_signal_frame_duration = video_signal_status.dwFrameDuration;
+			m_ticksPerFrame = (timingclocktime_t)round((1.0 / FPS(m_frame_duration, m_is_interlaced)) * TimingClockTicksPerSecond());
+			videoFormatChanged = true;
+		}
+		if (m_quant_range != video_signal_status.quantRange) {
+			m_quant_range = video_signal_status.quantRange;
+			videoFormatChanged = true;
+		}
+		if (m_color_format != video_signal_status.colorFormat) {
+			m_color_format = video_signal_status.colorFormat;
+			videoFormatChanged = true;
+		}
+
+		MWCAP_INPUT_SPECIFIC_STATUS inputStatus;
+		if ((MWGetInputSpecificStatus(m_channel_handle, &inputStatus) == MW_SUCCEEDED)) {
+			MWCAP_HDMI_SPECIFIC_STATUS hdmiSpecificStatus = inputStatus.hdmiStatus;
+			if (m_bit_depth != hdmiSpecificStatus.byBitDepth) {
+				m_bit_depth = hdmiSpecificStatus.byBitDepth;
 				videoFormatChanged = true;
 			}
+			if (m_pixel_encoding != hdmiSpecificStatus.pixelEncoding) {
+				m_pixel_encoding = hdmiSpecificStatus.pixelEncoding;
+				videoFormatChanged = true;
+			}
+		}
 
-			if (m_is_interlaced != video_signal_status.bInterlaced || m_frame_duration != video_signal_status.dwFrameDuration) {
-				m_is_interlaced = video_signal_status.bInterlaced;
-				m_frame_duration = video_signal_status.dwFrameDuration;
-				m_signal_frame_duration = video_signal_status.dwFrameDuration;
-				m_ticksPerFrame = (timingclocktime_t)round((1.0 / FPS(m_frame_duration, m_is_interlaced)) * TimingClockTicksPerSecond());
-				videoFormatChanged = true;
-			}
-			if (m_quant_range != video_signal_status.quantRange) {
-				m_quant_range = video_signal_status.quantRange;
-				videoFormatChanged = true;
-			}
-			if (m_color_format != video_signal_status.colorFormat) {
-				m_color_format = video_signal_status.colorFormat;
-				videoFormatChanged = true;
-			}
+		// Update FourCC based on bit depth for HDR/SDR detection
+		UpdateFourCCFromBitDepth();
 
-			MWCAP_INPUT_SPECIFIC_STATUS inputStatus;
-			if ((MWGetInputSpecificStatus(m_channel_handle, &inputStatus) == MW_SUCCEEDED)) {
-				MWCAP_HDMI_SPECIFIC_STATUS hdmiSpecificStatus = inputStatus.hdmiStatus;
-				if (m_bit_depth != hdmiSpecificStatus.byBitDepth) {
-					m_bit_depth = hdmiSpecificStatus.byBitDepth;
-					videoFormatChanged = true;
-				}
-				if (m_pixel_encoding != hdmiSpecificStatus.pixelEncoding) {
-					m_pixel_encoding = hdmiSpecificStatus.pixelEncoding;
-					videoFormatChanged = true;
-				}
-			}
-			SendCardStateCallback();
-			if (videoFormatChanged) {
-				m_display_mode = TranslateDisplayMode(m_width, m_height, m_is_interlaced, m_frame_duration);
-				SendVideoStateCallback();
-			}
-		//	if (!m_video_capturing)
+		if (videoFormatChanged)
+		{
+			DbgLog((LOG_TRACE, 1, TEXT("MagewellProCaptureDevice::VideoInputFormatChanged(): detected change")));
+			m_display_mode = TranslateDisplayMode(m_width, m_height, m_is_interlaced, m_frame_duration);
+
+			m_ticksPerFrame = (timingclocktime_t)round((1.0 / FPS(m_frame_duration, m_is_interlaced)) * TimingClockTicksPerSecond());
+
+			// Inform callback handlers that stream will be invalid before re-starting
+			if (!SendVideoStateCallback())
+				return E_FAIL;
+
+		//	if (m_video_capturing) {
+		//		StopCapture();
+		//	}
+		//	if (!m_video_capturing) {
 		//		StartCapture();
+		//	}
+
+
+			DbgLog((LOG_TRACE, 1, TEXT("MagewellProCaptureDevice::VideoInputFormatChanged(): restart success")));
 		}
-	}
-	return 0;
-}
 
-HRESULT STDMETHODCALLTYPE MagewellProCaptureDevice::VideoInputFormatChanged()
-{
-//	if (!m_outputCaptureData.load(std::memory_order_acquire))
-	//	return S_OK;
-	MWCAP_VIDEO_SIGNAL_STATUS video_signal_status;
-	MWGetVideoSignalStatus(m_channel_handle, &video_signal_status);
-	if (video_signal_status.state != MWCAP_VIDEO_SIGNAL_LOCKED || m_state == CAPTUREDEVICESTATE_UNKNOWN)
-		return 1;
-
-	bool videoFormatChanged = false;
-
-	if (m_width != video_signal_status.cx || m_height != video_signal_status.cy) {
-		m_width = video_signal_status.cx;
-		m_height = video_signal_status.cy;
-		videoFormatChanged = true;
-	}
-
-	if (m_is_interlaced != video_signal_status.bInterlaced || m_frame_duration != video_signal_status.dwFrameDuration) {
-		m_is_interlaced = video_signal_status.bInterlaced;
-		m_frame_duration = video_signal_status.dwFrameDuration;
-		m_signal_frame_duration = video_signal_status.dwFrameDuration;
-		m_ticksPerFrame = (timingclocktime_t)round((1.0 / FPS(m_frame_duration, m_is_interlaced)) * TimingClockTicksPerSecond());
-		videoFormatChanged = true;
-	}
-	if (m_quant_range != video_signal_status.quantRange) {
-		m_quant_range = video_signal_status.quantRange;
-		videoFormatChanged = true;
-	}
-	if (m_color_format != video_signal_status.colorFormat) {
-		m_color_format = video_signal_status.colorFormat;
-		videoFormatChanged = true;
-	}
-
-	MWCAP_INPUT_SPECIFIC_STATUS inputStatus;
-	if ((MWGetInputSpecificStatus(m_channel_handle, &inputStatus) == MW_SUCCEEDED)) {
-		MWCAP_HDMI_SPECIFIC_STATUS hdmiSpecificStatus = inputStatus.hdmiStatus;
-		if (m_bit_depth != hdmiSpecificStatus.byBitDepth) {
-			m_bit_depth = hdmiSpecificStatus.byBitDepth;
-			videoFormatChanged = true;
-		}
-		if (m_pixel_encoding != hdmiSpecificStatus.pixelEncoding) {
-			m_pixel_encoding = hdmiSpecificStatus.pixelEncoding;
-			videoFormatChanged = true;
-		}
-	}
-
-	if (videoFormatChanged)
-	{
-		DbgLog((LOG_TRACE, 1, TEXT("MagewellProCaptureDevice::VideoInputFormatChanged(): detected change")));
-		m_display_mode = TranslateDisplayMode(m_width, m_height, m_is_interlaced, m_frame_duration);
-
-		m_ticksPerFrame = (timingclocktime_t)round((1.0 / FPS(m_frame_duration, m_is_interlaced)) * TimingClockTicksPerSecond());
-
-		// Inform callback handlers that stream will be invalid before re-starting
-		if (!SendVideoStateCallback())
-			return E_FAIL;
-
-	//	if (m_video_capturing) {
-	//		StopCapture();
-	//	}
-	//	if (!m_video_capturing) {
-	//		StartCapture();
-	//	}
-		
-		
-		DbgLog((LOG_TRACE, 1, TEXT("MagewellProCaptureDevice::VideoInputFormatChanged(): restart success")));
-	}
-
-	return S_OK;
-}
-
-
-
-HRESULT	MagewellProCaptureDevice::QueryInterface(REFIID iid, LPVOID* ppv)
-{
-	if (!ppv)
-		return E_INVALIDARG;
-
-	// Initialise the return result
-	*ppv = nullptr;
-
-	// Obtain the IUnknown interface and compare it the provided REFIID
-	if (iid == IID_IUnknown)
-	{
-		*ppv = this;
-		AddRef();
 		return S_OK;
 	}
 
-	return E_NOINTERFACE;
-}
-
-
-ULONG MagewellProCaptureDevice::AddRef(void)
-{
-	return ++m_refCount;
-}
-
-
-ULONG MagewellProCaptureDevice::Release(void)
-{
-	ULONG newRefValue = --m_refCount;
-	if (newRefValue == 0)
-		delete this;
-
-	return newRefValue;
-}
-
-
-void MagewellProCaptureDevice::ResetVideoState()
-{
-//	m_videoFrameSeen = false;
-//	m_bmdPixelFormat = BMD_PIXEL_FORMAT_INVALID;
-//	m_bmdDisplayMode = BMD_DISPLAY_MODE_INVALID;
-//	m_videoHasInputSource = false;
-//	m_videoEotf = BMD_EOTF_INVALID;
-//	m_videoColorSpace = BMD_COLOR_SPACE_INVALID;
-
-	m_width = 0;//0
-	m_height = 0;//0
-	m_color_format = MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN;//
-	m_quant_range = MWCAP_VIDEO_QUANTIZATION_UNKNOWN;
-	m_sat_range = MWCAP_VIDEO_SATURATION_UNKNOWN;
-	//m_videoEotf = -1;
-	m_signal_frame_duration = 0;
-	m_frame_duration = 0;
-	m_videoHasHdrData = false;
-
-	ZeroMemory(&m_videoHdrData, sizeof(m_videoHdrData));
-}
-
-
-bool MagewellProCaptureDevice::SendVideoStateCallback()
-{
-	// WARNING: Called from some internal capture card thread!
-
-	const bool hasValidVideoState = (m_display_mode != NULL);
-
-//		(m_videoFrameSeen) &&
-//		(m_bmdPixelFormat != BMD_PIXEL_FORMAT_INVALID) &&
-//		(m_bmdDisplayMode != BMD_DISPLAY_MODE_INVALID) &&
-//		(m_videoHasInputSource) &&
-//		(m_videoEotf != BMD_EOTF_INVALID) &&
-//		(m_videoColorSpace != BMD_COLOR_SPACE_INVALID);
-
-	const bool hasValidHdrData =
-		m_videoHasHdrData &&
-		m_videoHdrData.IsValid();
-
-	//
-	// Build and send reply
-	//
-
-	try
+	void MagewellProCaptureDevice::UpdateFourCCFromBitDepth()
 	{
+		MWCAP_INPUT_SPECIFIC_STATUS inputStatus;
+		DWORD old_fourcc = m_mw_fourcc;
 
-		VideoStateComPtr videoState = DBG_NEW VideoState();
-		if (!videoState)
-			throw std::runtime_error("Failed to alloc VideoStateComPtr");
+		if (MWGetInputSpecificStatus(m_channel_handle, &inputStatus) == MW_SUCCEEDED) {
+			MWCAP_HDMI_SPECIFIC_STATUS hdmiSpecificStatus = inputStatus.hdmiStatus;
+			BYTE bit_depth = hdmiSpecificStatus.byBitDepth;
 
-		// Not valid, don't send
-		if (!hasValidVideoState)
-		{
-			videoState->valid = false;
-		}
-		// Valid state, send
-		else
-		{
-			videoState->valid = true;
-			videoState->displayMode = m_display_mode;
-			videoState->eotf = TranslateMagewellEOTF(m_videoEotf);
-			videoState->colorspace = TranslateColorSpace(m_color_format);
-			videoState->invertedVertical = m_videoInvertedVertical;
-			videoState->videoFrameEncoding = TranslateFrameEncoding(m_mw_fourcc);
+			// Dynamic FourCC selection based on bit depth
+			// If signal reports > 8 bits per component (HDR/10-bit+), use P010
+			// If standard dynamic range or 8-bit, fall back to NV12
+			if (bit_depth > 8) {
+				// HDR signal (10-bit, 12-bit, etc.) - use P010 (16 bits per component)
+				m_mw_fourcc = MWFOURCC_P010;
+				DbgLog((LOG_TRACE, 1, TEXT("Magewell: HDR signal detected (bit depth: %d), switching to P010"), bit_depth));
+			}
+			else {
+				// SDR signal (8-bit) - use NV12 (12 bits per pixel footprint)
+				m_mw_fourcc = MWFOURCC_NV12;
+				DbgLog((LOG_TRACE, 1, TEXT("Magewell: SDR signal detected (bit depth: %d), switching to NV12"), bit_depth));
+			}
 
-			// Build a fresh copy of the HDR data if valid
-			if (hasValidHdrData)
-			{
-				videoState->hdrData = std::make_shared<HDRData>();
-				*(videoState->hdrData) = m_videoHdrData;
+			// If FourCC changed and we're capturing, need to reallocate buffers
+			if (m_mw_fourcc != old_fourcc && m_video_capturing) {
+				DbgLog((LOG_TRACE, 1, TEXT("Magewell: FourCC changed, stopping capture to reallocate buffers")));
+
+				// Stop capture temporarily
+				m_video_capturing = false;
+				if (!SetEvent(interruptEvent)) {
+					printf("SetEvent failed (%d)\n", GetLastError());
+				}
+
+				// Wait for capture thread to stop
+				if (m_video_thread) {
+					WaitForSingleObject(m_video_thread, 1000);
+				}
+
+				// Unpin current buffers
+				st_frame_t* p_frame;
+				for (int i = 0; p_frame = m_p_video_buffer->get_buffer_by_index(i); i++) {
+					MWUnpinVideoBuffer(m_channel_handle, p_frame->p_buffer);
+				}
+
+				// Delete old buffer and reallocate with new FourCC
+				if (m_p_video_buffer != NULL) {
+					delete m_p_video_buffer;
+					m_p_video_buffer = NULL;
+				}
+
+				// Create new buffer with updated FourCC
+				if (check_video_buffer()) {
+					// Pin new buffers
+					DWORD stride = FOURCC_CalcMinStride(m_mw_fourcc, m_width, 2);
+					DWORD frame_size = FOURCC_CalcImageSize(m_mw_fourcc, m_width, m_height, stride);
+					for (int i = 0; p_frame = m_p_video_buffer->get_buffer_by_index(i); i++) {
+						MWPinVideoBuffer(m_channel_handle, p_frame->p_buffer, frame_size);
+					}
+
+					// Restart capture
+					m_video_capturing = true;
+					HANDLE capture_event = CreateEvent(NULL, FALSE, FALSE, NULL);
+					MWStartVideoCapture(m_channel_handle, capture_event);
+					CloseHandle(capture_event);
+
+					// Restart render thread
+					m_render_thread = CreateThread(NULL, 0, video_render_pro, (LPVOID)this, 0, NULL);
+
+					DbgLog((LOG_TRACE, 1, TEXT("Magewell: Buffer reallocation and capture restart complete")));
+				}
+				else {
+					DbgLog((LOG_ERROR, 1, TEXT("Magewell: Failed to reallocate buffers after FourCC change")));
+					m_video_capturing = false;
+				}
 			}
 		}
-
-		m_callback->OnCaptureDeviceVideoStateChange(videoState);
-		//if (videoState != NULL)
-		//	delete videoState;
-
 	}
-	catch (const std::runtime_error& e)
+
+	HRESULT	MagewellProCaptureDevice::QueryInterface(REFIID iid, LPVOID* ppv)
 	{
-		wchar_t* ew = ToString(e.what());
-		Error(ew);
-		delete[] ew;
+		if (!ppv)
+			return E_INVALIDARG;
 
-		return false;
+		// Initialise the return result
+		*ppv = nullptr;
+
+		// Obtain the IUnknown interface and compare it the provided REFIID
+		if (iid == IID_IUnknown)
+		{
+			*ppv = this;
+			AddRef();
+			return S_OK;
+		}
+
+		return E_NOINTERFACE;
 	}
 
-	return true;
-}
+
+	ULONG MagewellProCaptureDevice::AddRef(void)
+	{
+		return ++m_refCount;
+	}
 
 
-void MagewellProCaptureDevice::SendCardStateCallback()
-{
-	// WARNING: Called from some internal capture card thread!
+	ULONG MagewellProCaptureDevice::Release(void)
+	{
+		ULONG newRefValue = --m_refCount;
+		if (newRefValue == 0)
+			delete this;
+
+		return newRefValue;
+	}
 
 
-	if (!m_callback)
-		return;
+	void MagewellProCaptureDevice::ResetVideoState()
+	{
+	//	m_videoFrameSeen = false;
+	//	m_bmdPixelFormat = BMD_PIXEL_FORMAT_INVALID;
+	//	m_bmdDisplayMode = BMD_DISPLAY_MODE_INVALID;
+	//	m_videoHasInputSource = false;
+	//	m_videoEotf = BMD_EOTF_INVALID;
+	//	m_videoColorSpace = BMD_COLOR_SPACE_INVALID;
 
-	CaptureDeviceCardStateComPtr cardState = DBG_NEW CaptureDeviceCardState();
-	if (!cardState)
-		throw std::runtime_error("Failed to alloc CaptureDeviceCardStateComPtr");
+		m_width = 0;//0
+		m_height = 0;//0
+		m_color_format = MWCAP_VIDEO_COLOR_FORMAT_UNKNOWN;//
+		m_quant_range = MWCAP_VIDEO_QUANTIZATION_UNKNOWN;
+		m_sat_range = MWCAP_VIDEO_SATURATION_UNKNOWN;
+		//m_videoEotf = -1;
+		m_signal_frame_duration = 0;
+		m_frame_duration = 0;
+		m_videoHasHdrData = false;
+
+		ZeroMemory(&m_videoHdrData, sizeof(m_videoHdrData));
+	}
+
+
+	bool MagewellProCaptureDevice::SendVideoStateCallback()
+	{
+		// WARNING: Called from some internal capture card thread!
+
+		const bool hasValidVideoState = (m_display_mode != NULL);
+
+	//		(m_videoFrameSeen) &&
+	//		(m_bmdPixelFormat != BMD_PIXEL_FORMAT_INVALID) &&
+	//		(m_bmdDisplayMode != BMD_DISPLAY_MODE_INVALID) &&
+	//		(m_videoHasInputSource) &&
+	//		(m_videoEotf != BMD_EOTF_INVALID) &&
+	//		(m_videoColorSpace != BMD_COLOR_SPACE_INVALID);
+
+		const bool hasValidHdrData =
+			m_videoHasHdrData &&
+			m_videoHdrData.IsValid();
+
+		//
+		// Build and send reply
+		//
+
+		try
+		{
+
+			VideoStateComPtr videoState = DBG_NEW VideoState();
+			if (!videoState)
+				throw std::runtime_error("Failed to alloc VideoStateComPtr");
+
+			// Not valid, don't send
+			if (!hasValidVideoState)
+			{
+				videoState->valid = false;
+			}
+			// Valid state, send
+			else
+			{
+				videoState->valid = true;
+				videoState->displayMode = m_display_mode;
+				videoState->eotf = TranslateMagewellEOTF(m_videoEotf);
+				videoState->colorspace = TranslateColorSpace(m_color_format);
+				videoState->invertedVertical = m_videoInvertedVertical;
+				videoState->videoFrameEncoding = TranslateFrameEncoding(m_mw_fourcc);
+
+				// Build a fresh copy of the HDR data if valid
+				if (hasValidHdrData)
+				{
+					videoState->hdrData = std::make_shared<HDRData>();
+					*(videoState->hdrData) = m_videoHdrData;
+				}
+			}
+
+			m_callback->OnCaptureDeviceVideoStateChange(videoState);
+			//if (videoState != NULL)
+			//	delete videoState;
+
+		}
+		catch (const std::runtime_error& e)
+		{
+			wchar_t* ew = ToString(e.what());
+			Error(ew);
+			delete[] ew;
+
+			return false;
+		}
+
+		return true;
+	}
+
+
+	void MagewellProCaptureDevice::SendCardStateCallback()
+	{
+		// WARNING: Called from some internal capture card thread!
+
+
+		if (!m_callback)
+			return;
+
+		CaptureDeviceCardStateComPtr cardState = DBG_NEW CaptureDeviceCardState();
+		if (!cardState)
+			throw std::runtime_error("Failed to alloc CaptureDeviceCardStateComPtr");
+
+		//
+		// Input data
+		//
+
+		cardState->inputLocked = (m_state != CaptureDeviceState::CAPTUREDEVICESTATE_UNKNOWN) ? InputLocked::YES : InputLocked::NO;
+		cardState->inputEncoding = TranslateColorFormat(m_pixel_encoding);
+		cardState->inputBitDepth = TranslateBitDepth(m_bit_depth);
+		cardState->inputDisplayMode = m_display_mode;
+
+		//
+		// Send
+		//
+		m_callback->OnCaptureDeviceCardStateChange(cardState);
+	}
+
+
+	void MagewellProCaptureDevice::UpdateState(CaptureDeviceState state)
+	{
+		// WARNING: Called from some internal capture card thread!
+
+		//assert(state != m_state);  // Double state is not allowed
+		//if (state == m_state) return;
+		m_state = state;
+
+		if (m_callback)
+			m_callback->OnCaptureDeviceState(state);
+	}
+
+
+	void MagewellProCaptureDevice::Error(const CString& error)
+	{
+		// WARNING: Can be called from any thread.
+
+		if (m_callback)
+			m_callback->OnCaptureDeviceError(error);
+
+		// TODO: Stop capture and return error state?
+	}
+
 
 	//
-	// Input data
+	// Internal helpers
 	//
 
-	cardState->inputLocked = (m_state != CaptureDeviceState::CAPTUREDEVICESTATE_UNKNOWN) ? InputLocked::YES : InputLocked::NO;
-	cardState->inputEncoding = TranslateColorFormat(m_pixel_encoding);
-	cardState->inputBitDepth = TranslateBitDepth(m_bit_depth); 
-	cardState->inputDisplayMode = m_display_mode;
-	
-	//
-	// Send
-	//
-	m_callback->OnCaptureDeviceCardStateChange(cardState);
-}
-
-
-void MagewellProCaptureDevice::UpdateState(CaptureDeviceState state)
-{
-	// WARNING: Called from some internal capture card thread!
-
-	//assert(state != m_state);  // Double state is not allowed
-	//if (state == m_state) return;
-	m_state = state;
-
-	if (m_callback)
-		m_callback->OnCaptureDeviceState(state);
-}
-
-
-void MagewellProCaptureDevice::Error(const CString& error)
-{
-	// WARNING: Can be called from any thread.
-
-	if (m_callback)
-		m_callback->OnCaptureDeviceError(error);
-
-	// TODO: Stop capture and return error state?
-}
-
-
-//
-// Internal helpers
-//
-
-/*
-void MagewellProCaptureDevice::OnNotifyStatusChanged(BMDDeckLinkStatusID statusID)
-{
-	// WARNING: Called from some internal capture card thread!
-
-	if (!m_deckLinkInput)
-		return;
-
-	switch (statusID)
+	/*
+	void MagewellProCaptureDevice::OnNotifyStatusChanged(BMDDeckLinkStatusID statusID)
 	{
-	// Device state changed
-	case bmdDeckLinkStatusBusy:
-		OnLinkStatusBusyChange();
-		break;
+		// WARNING: Called from some internal capture card thread!
 
-	// Card state changed.
-	case bmdDeckLinkStatusVideoInputSignalLocked:
-	case bmdDeckLinkStatusDetectedVideoInputFieldDominance:
-	case bmdDeckLinkStatusDetectedVideoInputMode:
-	case bmdDeckLinkStatusDetectedVideoInputFormatFlags:
-		SendCardStateCallback();
-		break;
+		if (!m_deckLinkInput)
+			return;
 
-	// Video state changed
-	case bmdDeckLinkStatusCurrentVideoInputPixelFormat:
-	case bmdDeckLinkStatusDetectedVideoInputColorspace:
-	case bmdDeckLinkStatusCurrentVideoInputMode:
-		// not used as we get these from from the frame and format callbacks
-		break;
+		switch (statusID)
+		{
+		// Device state changed
+		case bmdDeckLinkStatusBusy:
+			OnLinkStatusBusyChange();
+			break;
 
-	// All others ignored
-	default:
-		break;
+		// Card state changed.
+		case bmdDeckLinkStatusVideoInputSignalLocked:
+		case bmdDeckLinkStatusDetectedVideoInputFieldDominance:
+		case bmdDeckLinkStatusDetectedVideoInputMode:
+		case bmdDeckLinkStatusDetectedVideoInputFormatFlags:
+			SendCardStateCallback();
+			break;
+
+		// Video state changed
+		case bmdDeckLinkStatusCurrentVideoInputPixelFormat:
+		case bmdDeckLinkStatusDetectedVideoInputColorspace:
+		case bmdDeckLinkStatusCurrentVideoInputMode:
+			// not used as we get these from from the frame and frame callbacks
+			break;
+
+		// All others ignored
+		default:
+			break;
+		}
 	}
-}
 
-void MagewellProCaptureDevice::OnLinkStatusBusyChange()
-{
-	// WARNING: Called from some internal capture card thread!
-
-	LONGLONG intValue;
-	IF_NOT_S_OK(m_deckLinkStatus->GetInt(bmdDeckLinkStatusBusy, &intValue))
-		throw std::runtime_error("Failed to call bmdDeckLinkStatusBusy");
-
-	const bool captureBusy = (intValue & bmdDeviceCaptureBusy);
-
-	if (captureBusy)
+	void MagewellProCaptureDevice::OnLinkStatusBusyChange()
 	{
-		assert(m_state == CaptureDeviceState::CAPTUREDEVICESTATE_READY);
-		UpdateState(CaptureDeviceState::CAPTUREDEVICESTATE_CAPTURING);
+		// WARNING: Called from some internal capture card thread!
+
+		LONGLONG intValue;
+		IF_NOT_S_OK(m_deckLinkStatus->GetInt(bmdDeckLinkStatusBusy, &intValue))
+			throw std::runtime_error("Failed to call bmdDeckLinkStatusBusy");
+
+		const bool captureBusy = (intValue & bmdDeviceCaptureBusy);
+
+		if (captureBusy)
+		{
+			assert(m_state == CaptureDeviceState::CAPTUREDEVICESTATE_READY);
+			UpdateState(CaptureDeviceState::CAPTUREDEVICESTATE_CAPTURING);
+		}
+		else
+		{
+			assert(m_state == CaptureDeviceState::CAPTUREDEVICESTATE_CAPTURING);
+			ResetVideoState();
+			UpdateState(CaptureDeviceState::CAPTUREDEVICESTATE_READY);
+		}
 	}
-	else
-	{
-		assert(m_state == CaptureDeviceState::CAPTUREDEVICESTATE_CAPTURING);
-		ResetVideoState();
-		UpdateState(CaptureDeviceState::CAPTUREDEVICESTATE_READY);
-	}
-}
-*/
+	*/

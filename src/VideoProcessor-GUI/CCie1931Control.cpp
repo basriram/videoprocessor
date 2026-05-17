@@ -6,10 +6,11 @@
  * You should have received a copy of the GNU General Public License along with this program. If not, see < https://www.gnu.org/licenses/>.
  */
 
-#include <pch.h>
+#include "pch.h"
 
 #include <resource.h>
 #include <cie.h>
+#include <HDRData.h>
 
 #include "CCie1931Control.h"
 

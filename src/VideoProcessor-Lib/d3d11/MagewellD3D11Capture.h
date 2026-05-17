@@ -9,148 +9,184 @@
 #pragma once
 
 #include <d3d11.h>
+#include <dxgi.h>
+#include <vector>
+#include <mutex>
+#include <atomic>
 #include <functional>
-#include "D3D11TexturePool.h"
 
-// Forward declarations for Magewell SDK types
-// These are defined in magewell_pro_capture.h which should be included by the caller
-typedef void* MWChannelHandle;
-// HNOTIFY is defined in the Magewell SDK header (MWCaptureDef.h)
-// Do not redefine it here - it will be included by the implementation file
+// Forward declaration
+struct _HDMI_HDR_INFOFRAME_PAYLOAD;
 
 /**
- * MagewellD3D11Capture - Zero-copy capture bridge for Magewell SDK and D3D11 shared surfaces.
+ * Magewell D3D11 Capture - Zero-Copy HDR Pipeline
  * 
- * This class enables direct capture from Magewell hardware into D3D11 textures
- * that can be shared with madVR renderer without any CPU memory copies.
+ * This class provides direct D3D11 texture capture from Magewell hardware,
+ * enabling zero-copy frame delivery to madVR renderer for 4K HDR60 streams.
  * 
  * Key features:
- * - Direct Magewell capture into D3D11 textures via MWPinVideoBuffer
- * - Shared DXGI handles for cross-process access by madVR
- * - Automatic format detection (NV12/P010) based on input signal
- * - Keyed mutex synchronization for frame delivery
+ * - D3D11 shared textures for zero-copy rendering
+ * - P010 format support for 10-bit HDR
+ * - HDR metadata extraction and attachment
+ * - Lock-free frame queue for low-latency delivery
  */
 class MagewellD3D11Capture
 {
 public:
     /**
-     * Frame callback signature for delivering captured frames
+     * Frame callback signature
+     * @param textureIndex Index of the captured texture in the pool
+     * @param sharedHandle DXGI shared handle for the frame
+     * @param width Frame width
+     * @param height Frame height
+     * @param format Pixel format
+     * @param timestamp Frame timestamp
+     * @param hdrData HDR metadata (may be nullptr)
      */
-    typedef std::function<void(UINT textureIndex, ULONGLONG timestamp, DWORD width, DWORD height)> FrameCallback;
+    using FrameCallback = std::function<void(
+        UINT textureIndex,
+        HANDLE sharedHandle,
+        UINT width,
+        UINT height,
+        DXGI_FORMAT format,
+        LONGLONG timestamp,
+        std::shared_ptr<struct HDRData> hdrData
+    )>;
+
+    /**
+     * Texture configuration
+     */
+    struct TextureConfig
+    {
+        UINT width = 3840;
+        UINT height = 2160;
+        DXGI_FORMAT format = DXGI_FORMAT_P010;  // Default to 10-bit for HDR
+        UINT poolSize = 3;                       // Triple buffering
+        bool useKeyedMutex = true;              // Enable synchronization
+    };
 
     MagewellD3D11Capture();
     ~MagewellD3D11Capture();
 
     /**
-     * Initialize D3D11 capture pipeline
-     * @param width - Frame width
-     * @param height - Frame height
-     * @param fourcc - Pixel format (P010, NV12, etc.)
-     * @param callback - Frame delivery callback
+     * Initialize the capture pipeline
+     * @param width Frame width
+     * @param height Frame height
+     * @param fourcc Magewell FourCC (e.g., 'P010' for 10-bit HDR)
+     * @param callback Frame delivery callback
      * @return S_OK on success
      */
     HRESULT Initialize(UINT width, UINT height, DWORD fourcc, FrameCallback callback);
 
     /**
-     * Start capture
+     * Start capturing frames
      * @return S_OK on success
      */
     HRESULT StartCapture();
 
     /**
-     * Stop capture
+     * Stop capturing frames
      */
     void StopCapture();
 
     /**
-     * Check if capture is active
+     * Get the D3D11 device (for renderer integration)
      */
-    bool IsCapturing() const { return m_capturing; }
+    ID3D11Device* GetDevice() const { return m_pDevice; }
 
     /**
-     * Get D3D11 device
-     */
-    ID3D11Device* GetDevice() const { return m_texturePool.GetDevice(); }
-
-    /**
-     * Get texture shared handle for external access
-     * @param index - Texture index
-     * @return Shared handle
-     */
-    HANDLE GetTextureSharedHandle(UINT index) const;
-
-    /**
-     * Get texture at index (for internal use)
-     */
-    D3D11TexturePool::SharedTexture GetTexture(UINT index);
-
-    /**
-     * Get DXGI format
+     * Get the DXGI format being used
      */
     DXGI_FORMAT GetDXGIFormat() const { return m_dxgiFormat; }
 
     /**
-     * Get frame width
+     * Check if capture is active
      */
-    UINT GetWidth() const { return m_width; }
+    bool IsCapturing() const { return m_capturing.load(); }
 
     /**
-     * Get frame height
+     * Set HDR metadata callback (called when HDR mode changes)
      */
-    UINT GetHeight() const { return m_height; }
-
-    /**
-     * Get pixel format
-     */
-    DWORD GetFourCC() const { return m_fourcc; }
-
-    /**
-     * Acquire keyed mutex for texture (if enabled)
-     * @param index - Texture index
-     * @param timeoutMs - Timeout in milliseconds
-     * @return S_OK if mutex acquired
-     */
-    HRESULT AcquireMutex(UINT index, DWORD timeoutMs = 1000);
-
-    /**
-     * Release keyed mutex for texture
-     * @param index - Texture index
-     * @return S_OK on success
-     */
-    HRESULT ReleaseMutex(UINT index);
-
-    /**
-     * Set the Magewell channel handle for capture
-     * @param channelHandle - Magewell channel handle
-     */
-    void SetChannelHandle(MWChannelHandle channelHandle) { m_channelHandle = channelHandle; }
-
-    /**
-     * Get the Magewell channel handle
-     */
-    MWChannelHandle GetChannelHandle() const { return m_channelHandle; }
+    using HDRCallback = std::function<void(std::shared_ptr<struct HDRData>)>;
+    void SetHDRCallback(HDRCallback callback) { m_hdrCallback = callback; }
 
 private:
-    HRESULT CreateTexturePool();
-    HRESULT PinTextures();
-    void UnpinTextures();
-    void ProcessCapturedFrame();
+    /**
+     * Shared texture wrapper
+     */
+    struct SharedTexture
+    {
+        ID3D11Texture2D* texture = nullptr;
+        IDXGIResource* dxgiResource = nullptr;
+        HANDLE sharedHandle = INVALID_HANDLE_VALUE;
+        void* keyedMutex = nullptr;
+        std::atomic<UINT64> frameKey{0};
+    };
 
-    D3D11TexturePool m_texturePool;
+    /**
+     * Create the D3D11 device
+     */
+    HRESULT CreateD3D11Device();
+
+    /**
+     * Create the texture pool
+     */
+    HRESULT CreateTexturePool();
+
+    /**
+     * Release all textures
+     */
+    void ReleaseTexturePool();
+
+    /**
+     * Acquire keyed mutex for texture access
+     */
+    HRESULT AcquireKeyedMutex(UINT index, DWORD timeoutMs);
+
+    /**
+     * Release keyed mutex
+     */
+    void ReleaseKeyedMutex(UINT index);
+
+    /**
+     * Get DXGI format from Magewell FourCC
+     */
+    DXGI_FORMAT GetDXGIFormatFromFourCC(DWORD fourcc);
+
+    /**
+     * Process captured frame - called from Magewell callback
+     */
+    void ProcessCapturedFrame(UINT textureIndex, LONGLONG timestamp);
+
+    /**
+     * Parse HDR metadata from Magewell HDMI infoframe
+     */
+    std::shared_ptr<struct HDRData> ParseHDRMetadata();
+
+    // Configuration
+    TextureConfig m_config;
+    DXGI_FORMAT m_dxgiFormat;
+    DWORD m_fourcc;
+    UINT m_width;
+    UINT m_height;
+
+    // D3D11 resources
+    ID3D11Device* m_pDevice = nullptr;
+    ID3D11DeviceContext* m_pContext = nullptr;
+    std::vector<SharedTexture> m_textures;
+
+    // Capture state
+    std::atomic<bool> m_capturing{false};
+    std::atomic<UINT> m_currentFrameIndex{0};
+    std::atomic<UINT64> m_frameKey{0};
+
+    // Callbacks
     FrameCallback m_frameCallback;
-    
-    MWChannelHandle m_channelHandle = nullptr;
-    HANDLE m_captureEvent = nullptr;
-    HNOTIFY m_notifyHandle = nullptr;
-    
-    UINT m_width = 0;
-    UINT m_height = 0;
-    DWORD m_fourcc = 0;
-    DXGI_FORMAT m_dxgiFormat = DXGI_FORMAT_UNKNOWN;
-    
-    bool m_capturing = false;
-    bool m_initialized = false;
-    
-    // Current frame index for callback
-    UINT m_currentFrameIndex = 0;
+    HDRCallback m_hdrCallback;
+
+    // Synchronization
+    mutable std::mutex m_textureMutex;
+
+    // HDR state
+    bool m_isHDR = false;
 };

@@ -31,6 +31,7 @@
 // Common includes
 #include <set>
 #include <mutex>
+#include <memory>
 #include <stdexcept>
 #include <assert.h>
 #include <afxwin.h>

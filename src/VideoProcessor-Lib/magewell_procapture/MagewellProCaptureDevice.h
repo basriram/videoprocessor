@@ -199,6 +199,7 @@ private:
 	// Try to create and send a VideoState callback, upon failure will internally call Error() and return false
 	bool SendVideoStateCallback();
 	void SendCardStateCallback();
+	void UpdateFourCCFromBitDepth();
 
 	// Current state, update through UpdateState()
 	// WARNING: R/W from the capture thread, do not read from other thread
