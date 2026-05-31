@@ -242,6 +242,7 @@
     <ClCompile Include="magewell_procapture\MagewellProCaptureDeviceDiscoverer.cpp" />
     <ClCompile Include="magewell_procapture\MagewellProCaptureTranslate.cpp" />
     <ClCompile Include="magewell_procapture\ring_buffer\ring_buffer.cpp" />
+    <ClCompile Include="magewell_procapture\ring_buffer\ring_buffer_lockfree.cpp" />
     <ClCompile Include="microsoft_directshow\DirectShowRenderers.cpp" />
     <ClCompile Include="microsoft_directshow\DirectShowRendererStartStopTimeMethod.cpp" />
     <ClCompile Include="microsoft_directshow\DirectShowTimingClock.cpp" />

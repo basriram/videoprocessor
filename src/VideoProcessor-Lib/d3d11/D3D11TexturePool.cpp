@@ -239,6 +239,15 @@ void D3D11TexturePool::ReleaseTextures()
 {
     for (auto& texture : m_textures)
     {
+        // FIX #8: Explicitly release keyed mutex before texture destruction
+        // Keyed mutex has its own reference count and must be released explicitly
+        if (texture.keyedMutex)
+        {
+            // Release the keyed mutex interface (ID3D11KeyedMutex derives from IUnknown)
+            IUnknown* pKeyedMutex = static_cast<IUnknown*>(texture.keyedMutex);
+            pKeyedMutex->Release();
+            texture.keyedMutex = nullptr;
+        }
         if (texture.dxgiResource)
         {
             texture.dxgiResource->Release();
@@ -249,7 +258,6 @@ void D3D11TexturePool::ReleaseTextures()
             texture.texture->Release();
             texture.texture = nullptr;
         }
-        // keyedMutex is stored as void*, release handled by texture pool cleanup
         texture.sharedHandle = INVALID_HANDLE_VALUE;
     }
     m_textures.clear();

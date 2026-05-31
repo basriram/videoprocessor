@@ -14,6 +14,7 @@
 
 #include <LibMWCapture/MWCapture.h>
 #include "ring_buffer/ring_buffer.h"
+#include "ring_buffer/ring_buffer_lockfree.h"
 
 #include <VideoFrame.h>
 #include <ACaptureDevice.h>
@@ -98,7 +99,8 @@ public:
 	bool get_audio_sample_rate(int* p_sample_rate);
 	bool get_audio_bit_per_sample(int* p_bit_per_sample);
 	bool get_mirror_and_reverse(bool* p_is_mirror, bool* p_is_reverse);
-	CRingBuffer* m_p_video_buffer;
+	// Use lock-free ring buffer for low-latency 4K HDR capture
+	CRingBufferLockFree* m_p_video_buffer;
 	CRingBuffer* m_p_audio_buffer;
 protected:
 	bool                            m_is_start;

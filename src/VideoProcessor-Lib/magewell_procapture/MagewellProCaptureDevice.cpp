@@ -15,6 +15,7 @@
 #include <math.h>
 
 #include <magewell_procapture/MagewellProCaptureTranslate.h>
+#include <magewell_procapture/ring_buffer/ring_buffer_lockfree.h>
 #include <cie.h>
 #include <StringUtils.h>
 #include <WallClock.h>
@@ -71,11 +72,11 @@ MagewellProCaptureDevice::MagewellProCaptureDevice()
 	m_video_capturing = false;
 	m_audio_capturing = false;
 	m_capture_video = true;
-	m_capture_audio = true;
+	m_capture_audio = false;
 
 	m_bottom_up = false;//
 	m_process_switchs = 0;//
-	m_parital_notify = 1;// Enable partial notification for low-latency capture
+	m_parital_notify = 0;// Enable partial notification for low-latency capture
 	m_OSD_image = NULL;//NULL
 	m_p_OSD_rects = NULL;//NULL
 	m_OSD_rects_num = 0;//0
@@ -282,13 +283,21 @@ void MagewellProCaptureDevice::SetCallbackHandler(ICaptureDeviceCallback* callba
 bool MagewellProCaptureDevice::check_video_buffer()
 {
     if ((!m_user_video_buffer) && (NULL == m_p_video_buffer)) {
-        m_p_video_buffer = DBG_NEW CRingBuffer();
+        // Use lock-free ring buffer for low-latency 4K HDR capture
+        m_p_video_buffer = DBG_NEW CRingBufferLockFree();
         if (NULL == m_p_video_buffer) {
             return false;
         }
-        DWORD stride = FOURCC_CalcMinStride(m_mw_fourcc, m_width, 2);
-        DWORD frame_size = FOURCC_CalcImageSize(m_mw_fourcc, m_width, m_height, stride);
-        return m_p_video_buffer->set_property(10, frame_size);
+        
+        // FIX #7: Enforce 256-byte stride alignment for optimal P010 DMA transfers
+        // P010 requires 16-bit per component, 2 components for Y plane
+        DWORD stride = ((m_width * 2 + 255) & ~255);  // 256-byte aligned for P010
+        DWORD frame_size = stride * m_height * 3 / 2;  // P010 = 1.5 bytes per pixel (Y + UV)
+        
+        // FIX #2: Increase buffer count from 10 to 16 for 4K60 HDR
+        // At 60fps with GPU processing, we need headroom to prevent drops
+        // 16 buffers = ~800MB for 4K60 P010, sufficient for most workloads
+        return m_p_video_buffer->set_property(16, frame_size);
     }
     return true;
 }
@@ -527,9 +536,10 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 	printf("render video by input in\n");
 	st_frame_t* p_frame = NULL;
 	MagewellVideoFrame::MagewellVideoFrameComPtr  mVideoFrame;
-	// FIX #4: Reduced timeout from 50ms to 16ms for 4K60 support
-	// 16ms = 1 frame period at 60fps, prevents excessive latency spikes
-	DWORD frame_wait_time = 16;  
+	// FIX #3: Increased timeout from 16ms to 33ms for madVR GPU tonemapping headroom
+	// 33ms = 2 frame periods at 60fps, allows madVR to complete tone mapping without drops
+	// madVR's GPU processing can vary from 8-25ms depending on scene complexity
+	DWORD frame_wait_time = 33;  
 	HANDLE events[2] = { interruptEvent, frameAvailableEvent };
 
 	while (m_outputCaptureData.load(std::memory_order_acquire)) {

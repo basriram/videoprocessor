@@ -1,8 +1,11 @@
 #pragma once
+
 #include <stdio.h>
 #include <atomic>
 #include <mutex>
 
+// st_frame_t is shared between CRingBuffer and CRingBufferLockFree
+// and is defined in ring_buffer.h
 typedef struct st_frame {
     unsigned char*p_buffer;
     long long ts;

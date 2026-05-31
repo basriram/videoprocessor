@@ -8,20 +8,15 @@
 
 #pragma once
 
+// st_frame_t is defined in ring_buffer.h
+#include "ring_buffer.h"
+
+#ifndef RING_BUFFER_LOCKFREE_H
+#define RING_BUFFER_LOCKFREE_H
+
 #include <stdio.h>
 #include <atomic>
 #include <cstdlib>
-
-/**
- * Frame structure for ring buffer
- */
-typedef struct st_frame {
-    unsigned char* p_buffer;
-    long long ts;
-    unsigned int buffer_len;
-    unsigned int frame_len;
-    void* user_point;
-} st_frame_t;
 
 /**
  * Lock-Free Ring Buffer for 4K HDR60 Video Capture
@@ -130,3 +125,5 @@ private:
     // Statistics (relaxed ordering is sufficient)
     std::atomic<int> m_dropped_frames;
 };
+
+#endif // RING_BUFFER_LOCKFREE_H
