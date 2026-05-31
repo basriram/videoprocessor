@@ -255,6 +255,13 @@
 |--------|-------------|
 | New method | `GetDXGIFormat(DWORD mw_fourcc)` - static helper to map Magewell FourCC to DXGI_FORMAT |
 
+### File: `src/VideoProcessor-Lib/magewell_procapture/MagewellProCaptureDevice.cpp` (`render_by_input()`)
+
+| Change | Description |
+|--------|-------------|
+| Keyed mutex sync | Added keyed mutex acquire/release in render loop when D3D11 texture pool is enabled via `SetD3D11Device()` |
+| Frame index tracking | `keyed_mutex_index` counter for round-robin texture pool access |
+
 ---
 
 ## Summary of All Completed Optimizations

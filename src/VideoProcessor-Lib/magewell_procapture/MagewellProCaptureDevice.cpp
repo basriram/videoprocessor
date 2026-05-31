@@ -662,6 +662,10 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 		fn_loaded = true;
 	}
 
+	// Phase 3.2: Keyed mutex synchronization state
+	// Track frame index for keyed mutex round-robin access
+	UINT keyed_mutex_index = 0;
+
 	while (m_outputCaptureData.load(std::memory_order_acquire)) {
 		
 		// Phase 2: WaitOnAddress - sleep until write_counter changes
@@ -712,6 +716,21 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 				Sleep(1);
 			}
 			continue;
+		}
+		
+		// Phase 3.2: Keyed mutex synchronization
+		// When D3D11 texture pool is enabled, use keyed mutex for zero-copy sync
+		// This replaces event-based synchronization with ~microsecond latency
+		if (m_p_d3d11_texture_pool && m_enable_d3d11_capture) {
+			// Acquire the keyed mutex for this frame's texture
+			// The capture thread holds the mutex while writing; we acquire to read
+			HRESULT mutex_hr = m_p_d3d11_texture_pool->AcquireKeyedMutex(keyed_mutex_index % m_p_d3d11_texture_pool->GetTextureCount(), 16);
+			if (SUCCEEDED(mutex_hr)) {
+				// Immediately release after acquisition to signal render thread completion
+				// The capture thread will wait on this same key for next frame
+				m_p_d3d11_texture_pool->ReleaseKeyedMutex(keyed_mutex_index % m_p_d3d11_texture_pool->GetTextureCount());
+			}
+			keyed_mutex_index++;
 		}
 		
 		// Frame available - process it
