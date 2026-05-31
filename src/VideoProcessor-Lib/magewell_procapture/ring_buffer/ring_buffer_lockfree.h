@@ -97,13 +97,22 @@ public:
      */
     int GetDroppedFrameCount();
 
-    /**
-     * Reset statistics
-     */
-    void ResetStatistics();
+     /**
+      * Reset statistics
+      */
+     void ResetStatistics();
 
-private:
+     /**
+      * Get pointer to the write counter atomic for WaitOnAddress synchronization
+      * Used by render thread to implement futex-style wakeup instead of events
+      * @return Pointer to write counter (for WaitOnAddress API)
+      */
+     long long* GetWriteCounterPointer() { return &m_write_counter_for_wait; }
+
+ private:
     st_frame_t* m_p_frame;
+    // Pointer for WaitOnAddress synchronization (Phase 2 optimization)
+    long long   m_write_counter_for_wait;  // Mirrors m_write_num for WaitOnAddress API
     int         m_buffer_num;
     int         m_buffer_size;
     

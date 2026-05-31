@@ -138,6 +138,7 @@
       <SubSystem>
       </SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -161,6 +162,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -186,6 +188,7 @@
     <ClInclude Include="magewell_procapture\MagewellProCaptureDevice.h" />
     <ClInclude Include="magewell_procapture\MagewellProCaptureDeviceDiscoverer.h" />
     <ClInclude Include="magewell_procapture\MagewellProCaptureTranslate.h" />
+    <ClInclude Include="d3d11\D3D11TexturePool.h" />
     <ClInclude Include="magewell_procapture\ring_buffer\ring_buffer.h" />
     <ClInclude Include="microsoft_directshow\DirectShowDefines.h" />
     <ClInclude Include="microsoft_directshow\DirectShowRenderers.h" />
@@ -241,6 +244,7 @@
     <ClCompile Include="magewell_procapture\MagewellProCaptureDevice.cpp" />
     <ClCompile Include="magewell_procapture\MagewellProCaptureDeviceDiscoverer.cpp" />
     <ClCompile Include="magewell_procapture\MagewellProCaptureTranslate.cpp" />
+    <ClCompile Include="d3d11\D3D11TexturePool.cpp" />
     <ClCompile Include="magewell_procapture\ring_buffer\ring_buffer.cpp" />
     <ClCompile Include="magewell_procapture\ring_buffer\ring_buffer_lockfree.cpp" />
     <ClCompile Include="microsoft_directshow\DirectShowRenderers.cpp" />

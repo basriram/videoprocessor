@@ -12,10 +12,10 @@
 #include <WinSDKVer.h>
 
 
-// Windows 7 is the minimal version needed
-// https://docs.microsoft.com/en-us/windows/win32/winprog/using-the-windows-headers?redirectedfrom=MSDN
-#define NTDDI_VERSION NTDDI_WIN7
-#define _WIN32_WINNT _WIN32_WINNT_WIN7
+// Phase 3: Target Windows 8+ for WaitOnAddress API (futex-style synchronization)
+// https://docs.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitonaddress
+#define NTDDI_VERSION NTDDI_WIN8
+#define _WIN32_WINNT _WIN32_WINNT_WIN8
 
 
 #include <SDKDDKVer.h>

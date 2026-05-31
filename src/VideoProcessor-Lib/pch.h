@@ -9,7 +9,15 @@
 #pragma once
 
 
- // Windows define magic
+ // Windows define magic - MUST be before any Windows headers
+// Phase 3: Target Windows 8+ for WaitOnAddress API (futex-style synchronization)
+#ifndef WINVER
+#define WINVER 0x0602
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602
+#endif
+
 #define NOMINMAX
 #define VC_EXTRALEAN                         // Exclude rarely-used stuff from Windows headers
 #define WIN32_LEAN_AND_MEAN                  // Exclude rarely-used stuff from Windows headers

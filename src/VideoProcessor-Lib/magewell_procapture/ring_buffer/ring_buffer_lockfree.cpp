@@ -14,6 +14,7 @@ CRingBufferLockFree::CRingBufferLockFree()
     , m_buffer_num(0)
     , m_buffer_size(0)
     , m_write_num(0)
+    , m_write_counter_for_wait(0)  // Phase 2: WaitOnAddress counter
     , m_render_read_num(-1)
     , m_encode_read_num(-1)
     , m_rending(false)
@@ -118,6 +119,10 @@ void CRingBufferLockFree::buffer_filled()
     // Signal that the current buffer has been filled
     long long current_write = m_write_num.load(std::memory_order_relaxed);
     m_write_num.store(current_write + 1, std::memory_order_release);
+    
+    // Phase 2: Mirror write counter for WaitOnAddress synchronization
+    // This allows the render thread to use futex-style wakeup instead of events
+    m_write_counter_for_wait = current_write + 1;
 }
 
 st_frame_t* CRingBufferLockFree::get_frame_to_render()

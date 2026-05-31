@@ -260,15 +260,22 @@ void DirectShowMPCVideoRenderer::MediaTypeGenerate()
 		m_forceVideoTransferFunction :
 		TranslateVideoTranferFunction(m_videoState->eotf, m_videoState->colorspace);
 
+	// PHASE 4 OPTIMIZATION: Explicit nominal range for proper HDR tone mapping
+	// P010 (HDR 10-bit) uses full range (0-1023), NV12 uses video range (16-235)
+	// This is critical for correct PQ-to-SDR tone mapping in madVR
 	colorimetry->NominalRange =
 		(m_forceNominalRange != DXVA_NominalRange::DXVA_NominalRange_Unknown) ?
 		m_forceNominalRange :
-		DXVA_NominalRange::DXVA_NominalRange_Unknown;  // = Let renderer guess
+		((m_videoState->videoFrameEncoding == VideoFrameEncoding::P010) ?
+			DXVA_NominalRange::DXVA_NominalRange_0_255 :  // Full range for P010 HDR
+			DXVA_NominalRange::DXVA_NominalRange_16_235);  // Limited 16-235 for NV12
 
 	pvi2->dwControlFlags += AMCONTROL_USED;
 	pvi2->dwControlFlags += AMCONTROL_COLORINFO_PRESENT;
 
-	m_pmt.lSampleSize = DIBSIZE(pvi2->bmiHeader);
+	// PHASE 4 OPTIMIZATION: Use actual formatter output size instead of DIBSIZE
+	// This reduces DirectShow allocator overhead by matching actual frame size
+	m_pmt.lSampleSize = m_videoFramFormatter->GetOutFrameSize();
 }
 
 

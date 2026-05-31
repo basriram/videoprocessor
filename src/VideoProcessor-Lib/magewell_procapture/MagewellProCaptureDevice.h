@@ -20,6 +20,8 @@
 #include <ACaptureDevice.h>
 #include <ITimingClock.h>
 
+class D3D11TexturePool;
+
 // Known invalid values
 //#define BMD_PIXEL_FORMAT_INVALID (BMDPixelFormat)0
 //#define BMD_DISPLAY_MODE_INVALID (BMDDisplayMode)0
@@ -65,6 +67,12 @@ public:
 
 	HRESULT __stdcall VideoInputFormatChanged();
 	HRESULT __stdcall CardStateChanged();
+	// Phase 3: Zero-stall buffer pool switching
+	void SwitchActiveBufferPool(DWORD new_fourcc);
+	
+	// Phase 3.2: D3D11 texture pool initialization for keyed mutex sync
+	// Call this from the renderer before StartCapture() to share the D3D11 device
+	HRESULT SetD3D11Device(ID3D11Device* pDevice, ID3D11DeviceContext* pContext);
 
 	// IUnknown
 	HRESULT	QueryInterface(REFIID iid, LPVOID* ppv) override;
@@ -101,6 +109,10 @@ public:
 	bool get_mirror_and_reverse(bool* p_is_mirror, bool* p_is_reverse);
 	// Use lock-free ring buffer for low-latency 4K HDR capture
 	CRingBufferLockFree* m_p_video_buffer;
+	// Phase 3: Dual-format buffer pool for zero-stall HDR/SDR switching
+	CRingBufferLockFree* m_p_video_buffer_nv12;  // NV12 buffer pool (SDR)
+	CRingBufferLockFree* m_p_video_buffer_p010;  // P010 buffer pool (HDR)
+	DWORD m_active_video_fourcc;  // Current active FourCC (MWFOURCC_NV12 or MWFOURCC_P010)
 	CRingBuffer* m_p_audio_buffer;
 protected:
 	bool                            m_is_start;
@@ -132,8 +144,14 @@ private:
 	bool check();
 	bool                            m_video_capturing;
 	bool                            m_audio_capturing;
-	bool                            m_capture_video;
-	bool                            m_capture_audio;
+ 	bool                            m_capture_video;
+ 	bool                            m_capture_audio;
+	
+	// Phase 3.2: D3D11 texture pool for keyed mutex synchronization
+	D3D11TexturePool* m_p_d3d11_texture_pool;  // D3D11 shared textures for capture
+	ID3D11Device* m_p_d3d11_device;
+	ID3D11DeviceContext* m_p_d3d11_device_context;
+	bool m_enable_d3d11_capture;  // Flag to enable D3D11 texture capture path
 
 	BOOLEAN							m_bottom_up;//false
 
@@ -195,6 +213,24 @@ private:
 	HDRData m_videoHdrData;
 	uint64_t m_capturedVideoFrameCount = 0;
 	uint64_t m_missedVideoFrameCount = 0;
+	
+	// Phase 2: HDR metadata field-level tracking (for change detection)
+	double m_last_displayPrimaryRedX = 0;
+	double m_last_displayPrimaryRedY = 0;
+	double m_last_displayPrimaryGreenX = 0;
+	double m_last_displayPrimaryGreenY = 0;
+	double m_last_displayPrimaryBlueX = 0;
+	double m_last_displayPrimaryBlueY = 0;
+	double m_last_whitePointX = 0;
+	double m_last_whitePointY = 0;
+	double m_last_masteringDisplayMinLuminance = 0;
+	double m_last_masteringDisplayMaxLuminance = 0;
+	double m_last_maxCll = 0;
+	double m_last_maxFall = 0;
+	int m_last_videoEotf = -1;
+	
+	// Phase 2: HDR infoframe debounce counter
+	int m_hdrChangeCounter = 0;
 
 	void ResetVideoState();
 
