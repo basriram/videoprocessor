@@ -302,3 +302,89 @@ void D3D11TexturePool::ReleaseKeyedMutex(UINT index)
     ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(m_textures[index].keyedMutex);
     pKeyedMutex->ReleaseSync(0);
 }
+
+HRESULT D3D11TexturePool::UploadCpuBuffer(UINT index, const void* pSrcData, UINT srcRowPitch, UINT srcSlicePitch)
+{
+    if (!pSrcData || !m_pDevice || !m_pContext)
+    {
+        return E_INVALIDARG;
+    }
+    
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    if (index >= m_textures.size() || m_textures[index].texture == nullptr)
+    {
+        return E_INVALIDARG;
+    }
+    
+    ID3D11Texture2D* pTexture = m_textures[index].texture;
+    
+    // Acquire keyed mutex before writing to the texture
+    // This ensures the render thread is not reading this texture simultaneously
+    if (m_textures[index].keyedMutex)
+    {
+        ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(m_textures[index].keyedMutex);
+        HRESULT hr = pKeyedMutex->AcquireSync(0, 1000);  // 1 second timeout
+        if (FAILED(hr))
+        {
+            // Keyed mutex acquisition failed - texture is still being read by renderer
+            return hr;
+        }
+    }
+    
+    HRESULT hr = S_OK;
+    
+    // The texture was created with D3D11_USAGE_DEFAULT and no CPUAccessFlags,
+    // so we cannot Map/Unmap it directly. Instead, create a staging texture
+    // for the upload, or use UpdateSubresource.
+    //
+    // UpdateSubresource is simpler for D3D11_USAGE_DEFAULT textures:
+    // The source row pitch must match the expected format stride.
+    // For NV12/P010 planar formats, we pass the subresource data in the Y plane
+    // followed by the UV plane.
+    
+    D3D11_TEXTURE2D_DESC desc;
+    pTexture->GetDesc(&desc);
+    
+    // For planar YUV formats (NV12, P010), the subresource layout is:
+    // Subresource 0: Y plane (width * height pixels)
+    // Subresource 1: UV plane (width/2 * height/2 * 2 components)
+    //
+    // For packed formats (YUY2, BGRA), it's a single subresource.
+    UINT subresourceCount = desc.ArraySize * desc.MipLevels;
+    
+    if (desc.Format == DXGI_FORMAT_NV12 || desc.Format == DXGI_FORMAT_P010)
+    {
+        // Planar format: 2 subresources (Y and UV)
+        // Calculate pitches for each plane
+        D3D11_BOX srcBoxY = { 0, 0, 0, desc.Width, desc.Height, 1 };
+        D3D11_BOX srcBoxUV = { 0, 0, 0, desc.Width, desc.Height / 2, 1 };
+        
+        // The source data layout from MWCaptureVideoFrameToVirtualAddressEx:
+        // Y plane: srcRowPitch * desc.Height bytes
+        // UV plane: srcRowPitch * (desc.Height / 2) bytes (interleaved U and V)
+        UINT uvPlaneOffset = srcRowPitch * desc.Height;
+        
+        // Upload Y plane (subresource 0)
+        m_pContext->UpdateSubresource(pTexture, 0, &srcBoxY, pSrcData, srcRowPitch, 0);
+        
+        // Upload UV plane (subresource 1)
+        const void* pUVData = static_cast<const BYTE*>(pSrcData) + uvPlaneOffset;
+        m_pContext->UpdateSubresource(pTexture, 1, &srcBoxUV, pUVData, srcRowPitch, 0);
+    }
+    else
+    {
+        // Packed format: single subresource
+        D3D11_BOX srcBox = { 0, 0, 0, desc.Width, desc.Height, 1 };
+        m_pContext->UpdateSubresource(pTexture, 0, &srcBox, pSrcData, srcRowPitch, 0);
+    }
+    
+    // Release keyed mutex to signal render thread that texture is ready
+    if (m_textures[index].keyedMutex)
+    {
+        ID3D11KeyedMutex* pKeyedMutex = reinterpret_cast<ID3D11KeyedMutex*>(m_textures[index].keyedMutex);
+        pKeyedMutex->ReleaseSync(0);
+    }
+    
+    return hr;
+}

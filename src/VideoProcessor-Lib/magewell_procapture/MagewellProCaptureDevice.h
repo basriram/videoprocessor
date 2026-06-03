@@ -147,11 +147,12 @@ private:
  	bool                            m_capture_video;
  	bool                            m_capture_audio;
 	
-	// Phase 3.2: D3D11 texture pool for keyed mutex synchronization
+	// Phase 3.2: D3D11 texture pool for zero-copy capture-to-texture path
 	D3D11TexturePool* m_p_d3d11_texture_pool;  // D3D11 shared textures for capture
 	ID3D11Device* m_p_d3d11_device;
 	ID3D11DeviceContext* m_p_d3d11_device_context;
 	bool m_enable_d3d11_capture;  // Flag to enable D3D11 texture capture path
+	UINT m_d3d11_texture_index = 0;  // Round-robin index for texture pool access
 
 	BOOLEAN							m_bottom_up;//false
 

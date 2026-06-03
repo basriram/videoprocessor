@@ -104,15 +104,22 @@ public:
 
      /**
       * Get pointer to the write counter atomic for WaitOnAddress synchronization
-      * Used by render thread to implement futex-style wakeup instead of events
+      * Used by render thread to implement futex-style wakeup instead of events.
+      * NOTE: The returned pointer references m_write_counter_for_wait which is
+      * updated atomically with Release semantics after every buffer_filled().
       * @return Pointer to write counter (for WaitOnAddress API)
       */
-     long long* GetWriteCounterPointer() { return &m_write_counter_for_wait; }
+     volatile long long* GetWriteCounterPointer() { return &m_write_counter_for_wait; }
 
  private:
     st_frame_t* m_p_frame;
-    // Pointer for WaitOnAddress synchronization (Phase 2 optimization)
-    long long   m_write_counter_for_wait;  // Mirrors m_write_num for WaitOnAddress API
+    // Phase 1 Enhancement: Use volatile + explicit memory barriers for WaitOnAddress
+    // synchronization. This is NOT std::atomic because WaitOnAddress requires a
+    // plain memory address for kernel-mode futex-style wakeup - std::atomic's
+    // internal padding/layout is implementation-defined and may not be compatible.
+    // Instead, we use volatile to prevent compiler register-caching, and ensure
+    // proper memory ordering via InterlockedExchange64 in buffer_filled().
+    volatile long long m_write_counter_for_wait;  // Mirrors m_write_num for WaitOnAddress API
     int         m_buffer_num;
     int         m_buffer_size;
     

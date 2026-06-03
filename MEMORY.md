@@ -285,9 +285,9 @@ if (videoState->hdrData) {
 5. **16 buffers too large** - 4K P010 x 16 = ~414MB, adds ~26ms latency at 60fps
 
 ### Ring Buffer
-1. **Event wakeup latency** - 33ms timeout means frames wait up to 33ms
-2. **No WaitOnAddress** - Uses event-based wakeup instead of futex-style atomic wait
-3. **No keyed mutex usage** - Synchronization relies on events, not D3D11 keyed mutex
+1. **Event wakeup latency** - 33ms timeout means frames wait up to 33ms (mitigated by WaitOnAddress implementation)
+2. **No WaitOnAddress** - Uses event-based wakeup instead of futex-style atomic wait (MITIGATED: WaitOnAddress + InterlockedExchange64 implemented in Phase 1)
+3. **No keyed mutex usage** - Synchronization relies on events, not D3D11 keyed mutex (TODO for future phase)
 
 ### Renderer
 1. **Nominal range not set** - P010 should use full range, NV12 should use video range

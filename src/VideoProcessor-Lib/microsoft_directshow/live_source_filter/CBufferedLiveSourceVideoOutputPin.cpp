@@ -17,12 +17,22 @@ CBufferedLiveSourceVideoOutputPin::CBufferedLiveSourceVideoOutputPin(
 	HRESULT* phr):
 	ALiveSourceVideoOutputPin(filter, pLock, phr)
 {
+	// Phase 1: Create auto-reset event for frame queue notification.
+	// Initial state is non-signaled; signaled by OnVideoFrame when frames arrive.
+	m_hFrameEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+	if (!m_hFrameEvent) {
+		DbgLog((LOG_ERROR, 1, TEXT("CBufferedLiveSourceVideoOutputPin: Failed to create frame event, falling back to Sleep(1)")));
+	}
 }
 
 
 CBufferedLiveSourceVideoOutputPin::~CBufferedLiveSourceVideoOutputPin()
 {
 	PurgeQueue();
+	if (m_hFrameEvent) {
+		CloseHandle(m_hFrameEvent);
+		m_hFrameEvent = NULL;
+	}
 }
 
 
@@ -82,6 +92,13 @@ HRESULT CBufferedLiveSourceVideoOutputPin::Inactive()
 			PurgeQueue();
 		}
 
+		// Phase 1: Signal the frame event to wake the worker thread so it can see
+		// that m_isActive == false and exit promptly. Without this, the thread could
+		// block on WaitForSingleObject for up to 16ms before checking the flag.
+		if (m_hFrameEvent) {
+			SetEvent(m_hFrameEvent);
+		}
+
 		if (ThreadExists())
 		{
 			Close();
@@ -128,6 +145,13 @@ HRESULT CBufferedLiveSourceVideoOutputPin::OnVideoFrame(VideoFrame& videoFrame)
 		// Prevent from getting cleaned up and add to queue
 		videoFrame.SourceBufferAddRef();
 		m_videoFrameQueue.push_back(videoFrame);
+	}
+
+	// Phase 1: Signal the worker thread that a new frame is available.
+	// This replaces the old Sleep(1) polling with an event-based wakeup.
+	// The event is auto-reset, so the signal is consumed by one WaitForSingleObject call.
+	if (m_hFrameEvent) {
+		SetEvent(m_hFrameEvent);
 	}
 
 	return S_OK;
@@ -180,8 +204,12 @@ DWORD CBufferedLiveSourceVideoOutputPin::ThreadProc()
 
 	while (true)
 	{
-		// TODO: Sleep thread on empty queue and wake if frames arrive
-		Sleep(1);
+		// Phase 1: Wait for frame event instead of Sleep(1) polling.
+		// Sleep(1) has ~15ms granularity on typical Windows desktop systems, causing
+		// up to 15ms of unnecessary latency per frame. WaitForSingleObject on the
+		// auto-reset frame event wakes within microseconds when OnVideoFrame signals it.
+		// 16ms timeout = ~1 frame at 60fps, ensuring the thread never blocks indefinitely.
+		WaitForSingleObject(m_hFrameEvent, 16);
 
 		VideoFrame videoFrame;
 

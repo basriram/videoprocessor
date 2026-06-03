@@ -57,6 +57,13 @@ private:
 
 	REFERENCE_TIME m_nextVideoFrameStartTime = REFERENCE_TIME_INVALID;
 
+	// Phase 1 Enhancement: Auto-reset event used as a condition variable to wake the
+	// worker thread when a new frame arrives in the queue. Replaces Sleep(1) polling
+	// which wasted CPU and added up to 15ms of latency per frame due to Windows'
+	// scheduler granularity (the "1ms" sleep typically yields 8-15ms on desktop systems).
+	// With this event, the thread wakes within ~microseconds of a frame arriving.
+	HANDLE m_hFrameEvent = NULL;
+
 	// Thread function, upon return thread exist.
 	// Return codes > 0 indicate an error occured
 	DWORD ThreadProc();

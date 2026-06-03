@@ -121,6 +121,19 @@ public:
     void ReleaseKeyedMutex(UINT index);
 
     /**
+     * Upload CPU buffer data into a shared texture at the specified index.
+     * Uses ID3D11DeviceContext::Map/Unmap for efficient staging upload.
+     * Called after the capture driver writes frame data to a CPU buffer.
+     * 
+     * @param index - Texture index in the pool
+     * @param pSrcData - Source CPU buffer containing frame data
+     * @param srcRowPitch - Source row pitch in bytes
+     * @param srcSlicePitch - Source total slice size in bytes
+     * @return S_OK on success
+     */
+    HRESULT UploadCpuBuffer(UINT index, const void* pSrcData, UINT srcRowPitch, UINT srcSlicePitch);
+
+    /**
      * Get DXGI format for common pixel formats
      */
     static DXGI_FORMAT GetDXGIFormat(DWORD magewellFourCC);

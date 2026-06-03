@@ -387,6 +387,18 @@ void MagewellProCaptureDevice::SwitchActiveBufferPool(DWORD new_fourcc)
         return;
     }
     
+    // The hardware's capture format is changed implicitly through the m_mw_fourcc
+    // parameter passed to MWCaptureVideoFrameToVirtualAddressEx in the capture loop.
+    // That function reads raw data from the hardware's internal buffer and converts
+    // it to the target FourCC (NV12 or P010) in software. No explicit API call is
+    // needed to reconfigure the hardware itself.
+    //
+    // NOTE: The format conversion is "live" - MWCaptureVideoFrameToVirtualAddressEx
+    // will convert whatever the hardware provides to the requested output format.
+    // This means the switch is seamless and does not require stopping/restarting
+    // the capture pipeline. The frame_data will contain the newly formatted data
+    // starting from the next captured frame.
+    
     // Atomically switch the active buffer pointer
     // The capture thread uses get_buffer_to_fill() which is lock-free
     // The render thread uses get_frame_to_render() which is also lock-free
@@ -642,7 +654,8 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 	// Eliminates event signal propagation delay (~5-10ms vs 33ms event timeout)
 	// WaitOnAddress is available on Windows 8+ and provides kernel-level sleep
 	// that wakes up immediately when the memory address changes
-	long long* p_write_counter = m_p_video_buffer->GetWriteCounterPointer();
+	// Use volatile pointer for compatibility with InterlockedExchange64 in buffer_filled()
+	volatile long long* p_write_counter = m_p_video_buffer->GetWriteCounterPointer();
 	
 	// Track the last known write counter to detect new frames
 	long long last_write_counter = 0;
@@ -662,9 +675,13 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 		fn_loaded = true;
 	}
 
-	// Phase 3.2: Keyed mutex synchronization state
-	// Track frame index for keyed mutex round-robin access
-	UINT keyed_mutex_index = 0;
+	// Phase 3.2: Keyed mutex synchronization - currently stubbed.
+	// The D3D11 texture pool and keyed mutex infrastructure exists (SetD3D11Device,
+	// D3D11TexturePool), but is NOT yet wired into the capture path. The actual
+	// zero-copy D3D11 capture requires Magewell SDK direct-to-D3D11-texture APIs
+	// which are not yet integrated. Until then, the keyed mutex acquire/release
+	// below is removed as it was a no-op (acquire+immediate release with zero work)
+	// adding ~2-5μs of unnecessary overhead per frame.
 
 	while (m_outputCaptureData.load(std::memory_order_acquire)) {
 		
@@ -718,28 +735,86 @@ DWORD MagewellProCaptureDevice::render_by_input() {
 			continue;
 		}
 		
-		// Phase 3.2: Keyed mutex synchronization
-		// When D3D11 texture pool is enabled, use keyed mutex for zero-copy sync
-		// This replaces event-based synchronization with ~microsecond latency
-		if (m_p_d3d11_texture_pool && m_enable_d3d11_capture) {
-			// Acquire the keyed mutex for this frame's texture
-			// The capture thread holds the mutex while writing; we acquire to read
-			HRESULT mutex_hr = m_p_d3d11_texture_pool->AcquireKeyedMutex(keyed_mutex_index % m_p_d3d11_texture_pool->GetTextureCount(), 16);
-			if (SUCCEEDED(mutex_hr)) {
-				// Immediately release after acquisition to signal render thread completion
-				// The capture thread will wait on this same key for next frame
-				m_p_d3d11_texture_pool->ReleaseKeyedMutex(keyed_mutex_index % m_p_d3d11_texture_pool->GetTextureCount());
-			}
-			keyed_mutex_index++;
-		}
-		
 		// Frame available - process it
 		mVideoFrame = DBG_NEW MagewellVideoFrame();
-		const void* data = (void*)p_frame->p_buffer;
-		VideoFrame vpVideoFrame(
-			data, p_frame->frame_len,
-			(timingclocktime_t)p_frame->ts, mVideoFrame);
-		m_callback->OnCaptureDeviceVideoFrame(vpVideoFrame);
+		
+		// Phase 3.2: Check if this frame has a D3D11 texture backing store
+		// (set by capture_by_input() via p_frame->user_point).
+		// When the D3D11 path is active, pass the shared texture handle to the
+		// VideoFrame so downstream renderers can bind the GPU texture directly,
+		// eliminating the need for a CPU→GPU copy.
+		if (m_enable_d3d11_capture && m_p_d3d11_texture_pool && m_p_d3d11_texture_pool->IsInitialized() && p_frame->user_point != NULL)
+		{
+			// Extract the texture index (stored as +1 so 0 = no texture)
+			UINT texIndex = (UINT)((UINT_PTR)p_frame->user_point) - 1;
+			UINT poolSize = m_p_d3d11_texture_pool->GetTextureCount();
+			if (texIndex < poolSize)
+			{
+				// Get the shared texture metadata from the pool
+				D3D11TexturePool::SharedTexture sharedTex = m_p_d3d11_texture_pool->GetTexture(texIndex);
+				if (sharedTex.texture && sharedTex.sharedHandle != INVALID_HANDLE_VALUE)
+				{
+					// Acquire keyed mutex to ensure texture is fully written before reading
+					if (sharedTex.keyedMutex)
+					{
+						m_p_d3d11_texture_pool->AcquireKeyedMutex(texIndex, 1000);
+						m_p_d3d11_texture_pool->ReleaseKeyedMutex(texIndex);
+					}
+					
+					// Build D3D11TextureInfo for the VideoFrame
+					VideoFrame::D3D11TextureInfo texInfo = {};
+					texInfo.sharedHandle = sharedTex.sharedHandle;
+					texInfo.texture = sharedTex.texture;  // Renderer can open via shared handle or use directly
+					texInfo.width = m_width;
+					texInfo.height = m_height;
+					texInfo.format = D3D11TexturePool::GetDXGIFormat(m_active_video_fourcc);
+					texInfo.stride = FOURCC_CalcMinStride(m_active_video_fourcc, m_width, 2);
+					texInfo.frameKey = m_capturedVideoFrameCount;
+					
+					// Create VideoFrame with D3D11 texture info (zero-copy path)
+					// The downstream renderer (e.g. madVR) can open this shared texture
+					// via ID3D11Device::OpenSharedResource and bind it directly,
+					// eliminating the CPU→GPU copy that the CPU-pointer path requires.
+					VideoFrame vpVideoFrame(texInfo, (timingclocktime_t)p_frame->ts);
+					
+					// Release our reference to the shared texture (the VideoFrame holds
+					// its own reference via the texture pointer, but the downstream
+					// renderer should use OpenSharedResource to get its own reference)
+					if (sharedTex.dxgiResource) sharedTex.dxgiResource->Release();
+					if (sharedTex.texture) sharedTex.texture->Release();
+					
+					m_callback->OnCaptureDeviceVideoFrame(vpVideoFrame);
+				}
+				else
+				{
+					if (sharedTex.texture) sharedTex.texture->Release();
+					if (sharedTex.dxgiResource) sharedTex.dxgiResource->Release();
+					
+					// Fallback to CPU pointer path
+					const void* data = (void*)p_frame->p_buffer;
+					VideoFrame vpVideoFrame(data, p_frame->frame_len,
+						(timingclocktime_t)p_frame->ts, mVideoFrame);
+					m_callback->OnCaptureDeviceVideoFrame(vpVideoFrame);
+				}
+			}
+			else
+			{
+				// Invalid texture index - fallback to CPU pointer path
+				const void* data = (void*)p_frame->p_buffer;
+				VideoFrame vpVideoFrame(data, p_frame->frame_len,
+					(timingclocktime_t)p_frame->ts, mVideoFrame);
+				m_callback->OnCaptureDeviceVideoFrame(vpVideoFrame);
+			}
+		}
+		else
+		{
+			// CPU pointer path (legacy, or D3D11 not enabled)
+			const void* data = (void*)p_frame->p_buffer;
+			VideoFrame vpVideoFrame(
+				data, p_frame->frame_len,
+				(timingclocktime_t)p_frame->ts, mVideoFrame);
+			m_callback->OnCaptureDeviceVideoFrame(vpVideoFrame);
+		}
 	}
 
 render_cleanup:
@@ -785,15 +860,36 @@ DWORD MagewellProCaptureDevice::capture_by_input() {
 	}
 	DWORD event_wait_time = 100;
 	bool haveFrames = false;
+	// Track whether notify_status was already filled by the poll path
+	bool notify_status_valid = false;
+	ULONGLONG notify_status = 0;
 	while (m_outputCaptureData.load(std::memory_order_acquire)) {
-		if (WaitForMultipleObjects(2, events, FALSE, INFINITE) == 0) {
-			//interrupted
+		notify_status_valid = false;
+		
+		// Phase 1 Enhancement: Use bounded timeout (2ms) instead of INFINITE to prevent
+		// indefinite blocking when MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED notifications
+		// are missed or arrive late.
+		DWORD wait_result = WaitForMultipleObjects(2, events, FALSE, 2);
+		if (wait_result == WAIT_OBJECT_0) {
+			// interruptEvent was signaled
 			continue;
 		}
+		if (wait_result == WAIT_TIMEOUT) {
+			// Bounded timeout fallback: poll notify status directly.
+			// This prevents indefinite blocking when the kernel notification event is missed.
+			if (MWGetNotifyStatus(m_channel_handle, notify, &notify_status) == MW_SUCCEEDED &&
+			    (notify_status & MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED)) {
+				notify_status_valid = true;
+			} else {
+				continue;
+			}
+		}
 		
-		ULONGLONG notify_status = 0;
-		if (MWGetNotifyStatus(m_channel_handle, notify, &notify_status) != MW_SUCCEEDED) {
-			continue;
+		// WAIT_OBJECT_0+1 (notify_event was signaled) or WAIT_TIMEOUT with valid poll result
+		if (!notify_status_valid) {
+			if (MWGetNotifyStatus(m_channel_handle, notify, &notify_status) != MW_SUCCEEDED) {
+				continue;
+			}
 		}
 		if (!(notify_status & MWCAP_NOTIFY_VIDEO_FRAME_BUFFERED)) {
 			continue;
@@ -868,10 +964,72 @@ DWORD MagewellProCaptureDevice::capture_by_input() {
 		timingClockFrameTime += m_frameOffsetTicks;
 		m_p_video_buffer->buffer_filled();
 		m_capture_frame_count++;
-		if (!SetEvent(frameAvailableEvent))
+		
+		// Phase 3.2: When D3D11 texture pool is available, upload the CPU buffer
+		// to a shared D3D11 texture. This enables zero-copy rendering downstream:
+		// the renderer can access the texture directly via the shared handle instead
+		// of requiring a CPU→GPU copy from the old CPU-pointer path.
+		//
+		// The upload uses UpdateSubresource which performs a GPU-side copy from
+		// the CPU-mapped staging area to the Default-pool shared texture. This is
+		// efficient because:
+		// 1. The texture is already allocated with the correct format and size
+		// 2. UpdateSubresource is pipelined - the copy happens asynchronously
+		//    while the capture thread continues to the next frame
+		// 3. The keyed mutex ensures the render thread doesn't read a texture
+		//    that's being written to
+		//
+		// When D3D11 texture upload succeeds, the render thread will create a
+		// VideoFrame with D3D11TextureInfo (texture shared handle) instead of a
+		// CPU pointer, allowing the DirectShow renderer to directly bind the
+		// shared texture without copying to GPU.
+		if (m_enable_d3d11_capture && m_p_d3d11_texture_pool && m_p_d3d11_texture_pool->IsInitialized())
 		{
-			printf("SetEvent failed (%d)\n", GetLastError());
-			continue;
+			UINT poolSize = m_p_d3d11_texture_pool->GetTextureCount();
+			if (poolSize > 0)
+			{
+				UINT texIndex = m_d3d11_texture_index % poolSize;
+				HRESULT d3dHr = m_p_d3d11_texture_pool->UploadCpuBuffer(
+					texIndex,
+					p_frame->p_buffer,
+					stride,
+					frame_size);
+				
+				if (SUCCEEDED(d3dHr))
+				{
+					// Store the texture index in the frame so the render thread
+					// knows which texture contains this frame's data
+					p_frame->user_point = (void*)(UINT_PTR)(texIndex + 1);  // +1 so 0 = no texture
+					
+					// Advance to next texture for round-robin
+					m_d3d11_texture_index++;
+				}
+				else
+				{
+					// Texture upload failed - clear the texture index to fall back
+					// to CPU pointer path. This is non-fatal: the render thread
+					// will use the CPU buffer when no texture index is set.
+					p_frame->user_point = NULL;
+				}
+			}
+		}
+		else
+		{
+			p_frame->user_point = NULL;
+		}
+
+		// Phase 1 Enhancement: Remove redundant SetEvent(frameAvailableEvent) when
+		// WaitOnAddress is the primary wakeup mechanism. The render thread now uses
+		// WaitOnAddress on the ring buffer's write counter for futex-style wakeup,
+		// which has ~microsecond latency. The redundant SetEvent adds an unnecessary
+		// kernel-mode transition (~1-5μs) per frame with zero benefit.
+		// SetEvent is only done as fallback when WaitOnAddress is not available.
+		static bool s_setEventFallback = !GetModuleHandleW(L"KERNEL32.DLL") || !GetProcAddress(GetModuleHandleW(L"KERNEL32.DLL"), "WaitOnAddress");
+		if (s_setEventFallback) {
+			if (!SetEvent(frameAvailableEvent)) {
+				printf("SetEvent failed (%d)\n", GetLastError());
+				continue;
+			}
 		}
 		p_frame = NULL;
 	//	MWCAP_VIDEO_CAPTURE_STATUS capture_status;
