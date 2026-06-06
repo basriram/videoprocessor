@@ -118,7 +118,7 @@ protected:
 	bool                            m_is_start;
 	int								m_width;
 	int								m_height;
-	DWORD                           m_mw_fourcc;
+	std::atomic<DWORD>              m_mw_fourcc;
 	int                             m_is_mirror;
 	int                             m_is_reverse;
 

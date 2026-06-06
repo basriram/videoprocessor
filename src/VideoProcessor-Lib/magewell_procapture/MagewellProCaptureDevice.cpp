@@ -852,11 +852,29 @@ DWORD MagewellProCaptureDevice::capture_by_input() {
 	}
 	HANDLE events[2] = { interruptEvent, notify_event };
 
-	DWORD stride = FOURCC_CalcMinStride(m_mw_fourcc, m_width, 2);
-	DWORD frame_size = FOURCC_CalcImageSize(m_mw_fourcc, m_width, m_height, stride);
-	st_frame_t* p_frame;
-	for (int i = 0; p_frame = m_p_video_buffer->get_buffer_by_index(i); i++) {
-		MWPinVideoBuffer(m_channel_handle, p_frame->p_buffer, frame_size);
+	// Phase 1 Fix: Both format pools are pre-pinned here with their respective sizes.
+	// The active stride/frame_size are recalculated per iteration inside the loop
+	// using the atomic m_mw_fourcc to stay consistent with dynamic HDR ↔ SDR switches.
+	st_frame_t* p_frame = NULL;
+
+	// Pin NV12 pool buffers (with NV12 size)
+	if (m_p_video_buffer_nv12) {
+		DWORD nv12_stride = FOURCC_CalcMinStride(MWFOURCC_NV12, m_width, 2);
+		DWORD nv12_frame_size = FOURCC_CalcImageSize(MWFOURCC_NV12, m_width, m_height, nv12_stride);
+		for (int i = 0; p_frame = m_p_video_buffer_nv12->get_buffer_by_index(i); i++) {
+			MWPinVideoBuffer(m_channel_handle, p_frame->p_buffer, nv12_frame_size);
+		}
+		p_frame = NULL;
+	}
+
+	// Pin P010 pool buffers (with P010 size)
+	if (m_p_video_buffer_p010) {
+		DWORD p010_stride = FOURCC_CalcMinStride(MWFOURCC_P010, m_width, 2);
+		DWORD p010_frame_size = FOURCC_CalcImageSize(MWFOURCC_P010, m_width, m_height, p010_stride);
+		for (int i = 0; p_frame = m_p_video_buffer_p010->get_buffer_by_index(i); i++) {
+			MWPinVideoBuffer(m_channel_handle, p_frame->p_buffer, p010_frame_size);
+		}
+		p_frame = NULL;
 	}
 	DWORD event_wait_time = 100;
 	bool haveFrames = false;
@@ -910,8 +928,19 @@ DWORD MagewellProCaptureDevice::capture_by_input() {
 			continue;
 		}
 		prev_frame_capture_process();
+
+		// Phase 1 Fix: Recompute stride and frame_size on every iteration from the
+		// atomic m_mw_fourcc. This ensures consistency when the signal thread changes
+		// the format (e.g., PQ/HDR → P010 vs SDR → NV12) via UpdateFourCCFromBitDepth()
+		// while the capture thread is running. Without this, the stale stride/frame_size
+		// would be passed to MWCaptureVideoFrameToVirtualAddressEx, causing incorrect
+		// SDK conversion behavior and performance degradation.
+		DWORD current_fourcc = m_mw_fourcc.load(std::memory_order_relaxed);
+		DWORD stride = FOURCC_CalcMinStride(current_fourcc, m_width, 2);
+		DWORD frame_size = FOURCC_CalcImageSize(current_fourcc, m_width, m_height, stride);
+
 		MWCaptureVideoFrameToVirtualAddressEx(m_channel_handle, MWCAP_VIDEO_FRAME_ID_NEWEST_BUFFERED, (LPBYTE)p_frame->p_buffer,
-			frame_size, stride, m_bottom_up, NULL, m_mw_fourcc, m_width, m_height, m_process_switchs, m_parital_notify, m_OSD_image, m_p_OSD_rects, m_OSD_rects_num,
+			frame_size, stride, m_bottom_up, NULL, current_fourcc, m_width, m_height, m_process_switchs, m_parital_notify, m_OSD_image, m_p_OSD_rects, m_OSD_rects_num,
 			m_contrast, m_brightness, m_saturation, m_hue,
 			m_deinterlace_mode, m_aspect_ratio_convert_mode, m_p_rect_src, m_p_rect_dest,
 			m_aspect_x, m_aspect_y, m_color_format, m_quant_range, m_sat_range);
@@ -1036,8 +1065,20 @@ DWORD MagewellProCaptureDevice::capture_by_input() {
 	//	MWGetVideoCaptureStatus(m_channel_handle, &capture_status);
 	}
 		
-	for (int i = 0; p_frame = m_p_video_buffer->get_buffer_by_index(i); i++) {
-		MWUnpinVideoBuffer(m_channel_handle, p_frame->p_buffer);
+	// Phase 1 Fix: Unpin both buffer pools to prevent DMA buffer leaks when
+	// the active pool was switched during capture (e.g., PQ/HDR to SDR transition).
+	p_frame = NULL;
+	if (m_p_video_buffer_nv12) {
+		for (int i = 0; p_frame = m_p_video_buffer_nv12->get_buffer_by_index(i); i++) {
+			MWUnpinVideoBuffer(m_channel_handle, p_frame->p_buffer);
+		}
+		p_frame = NULL;
+	}
+	if (m_p_video_buffer_p010) {
+		for (int i = 0; p_frame = m_p_video_buffer_p010->get_buffer_by_index(i); i++) {
+			MWUnpinVideoBuffer(m_channel_handle, p_frame->p_buffer);
+		}
+		p_frame = NULL;
 	}
 	printf("capture video by input out\n");
 
@@ -1597,9 +1638,9 @@ HRESULT MagewellProCaptureDevice::SetD3D11Device(ID3D11Device* pDevice, ID3D11De
 			}
 
 		// Phase 3: Use zero-stall buffer pool switching instead of stopping capture
-		if (m_mw_fourcc != old_fourcc && m_video_capturing) {
+		if (m_mw_fourcc.load(std::memory_order_relaxed) != old_fourcc && m_video_capturing) {
 			DbgLog((LOG_TRACE, 1, TEXT("Magewell: FourCC changed from %08X to %08X, using zero-stall switch"),
-				old_fourcc, m_mw_fourcc));
+				old_fourcc, m_mw_fourcc.load()));
 			
 			// Phase 3: Switch to pre-allocated buffer pool without stopping capture
 			// This eliminates the 50-200ms pipeline stall
